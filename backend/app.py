@@ -126,9 +126,51 @@ class Student(db.Model):
 
 class Passage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200))
-    body = db.Column(db.Text)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    category = db.Column(db.String(50))
     grade_band = db.Column(db.Integer)
+    cover_image = db.Column(db.String(500))
+    is_featured = db.Column(db.Boolean, default=False)
+
+    chapters = db.relationship(
+        "Chapter",
+        backref="passage",
+        lazy=True,
+        cascade="all, delete-orphan"
+    )
+
+class Chapter(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    passage_id = db.Column(
+        db.Integer,
+        db.ForeignKey("passage.id"),
+        nullable=False
+    )
+
+    chapter_number = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+
+class ReadingProgress(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    student_id = db.Column(
+        db.Integer,
+        db.ForeignKey("student.id"),
+        nullable=False
+    )
+
+    passage_id = db.Column(
+        db.Integer,
+        db.ForeignKey("passage.id"),
+        nullable=False
+    )
+
+    current_chapter = db.Column(db.Integer, default=1)
+    completed_chapters = db.Column(db.Integer, default=0)
+    completed = db.Column(db.Boolean, default=False)
 
 
 class Question(db.Model):
@@ -391,6 +433,80 @@ def _load_states(student_id):
 def _fetch_candidates(skill_tag, difficulty):
     return Question.query.filter_by(skill_tag=skill_tag, difficulty=difficulty).all()
 
+@app.route('/api/passages')
+def get_passages():
+    student_id = request.args.get("student_id", type=int)
+
+    if not student_id:
+        return jsonify({
+            "error": "student_id required"
+        }), 400
+
+    student = Student.query.get(student_id)
+
+    if not student:
+        return jsonify({
+            "error": "student not found"
+        }), 404
+
+    passages = Passage.query.order_by(Passage.id).all()
+
+    result = []
+
+    for passage in passages:
+
+        chapter_count = Chapter.query.filter_by(
+            passage_id=passage.id
+        ).count()
+
+        progress = ReadingProgress.query.filter_by(
+            student_id=student_id,
+            passage_id=passage.id
+        ).first()
+
+        completed_chapters = (
+            progress.completed_chapters
+            if progress else 0
+        )
+
+        if chapter_count > 0:
+            progress_percent = round(
+                completed_chapters / chapter_count * 100
+            )
+        else:
+            progress_percent = 0
+
+        if progress_percent == 0:
+            completion_state = "Not Started"
+        elif progress_percent >= 100:
+            completion_state = "Completed"
+        else:
+            completion_state = "In Progress"
+
+        grade_labels = {
+            1: "Grades 3–5",
+            2: "Grades 6–8",
+            3: "Grades 9–12"
+        }
+
+        result.append({
+            "id": passage.id,
+            "title": passage.title,
+            "description": passage.description,
+            "category": passage.category,
+            "grade_band": grade_labels.get(
+                passage.grade_band,
+                "All Grades"
+            ),
+            "chapter_count": chapter_count,
+            "completed_chapters": completed_chapters,
+            "progress_percent": progress_percent,
+            "completion_state": completion_state,
+            "cover_image": passage.cover_image,
+            "is_featured": passage.is_featured
+        })
+
+    return jsonify(result)
 
 @app.route('/api/assessment/passages')
 def assessment_passages():
