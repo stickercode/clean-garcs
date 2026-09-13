@@ -401,6 +401,7 @@ function renderResults() {
 async function loadNextQuestion() {
   const savedStudent = localStorage.getItem('garcs_student');
   let student = null;
+
   if (savedStudent) {
     try {
       student = JSON.parse(savedStudent);
@@ -410,6 +411,7 @@ async function loadNextQuestion() {
   }
 
   const studentId = student?.student_id || state.userId;
+
   if (!studentId) {
     window.location.href = '/login';
     return false;
@@ -417,66 +419,137 @@ async function loadNextQuestion() {
 
   state.userId = studentId;
   state.isLoading = true;
-  app.innerHTML = `<div class="fade-in-up" style="text-align:center;padding:2rem 0;">${headerHTML()}<p style="color:var(--on-surface-variant);">Loading your next adaptive question…</p></div>`;
 
-  let sessionRes;
-  let sessionPayload;
+  app.innerHTML = `
+    <div class="fade-in-up" style="text-align:center;padding:2rem 0;">
+      ${headerHTML()}
+      <p style="color:var(--on-surface-variant);">
+        Loading your next adaptive question…
+      </p>
+    </div>
+  `;
 
   try {
+
+    // ============================================================
+    // START A NEW ASSESSMENT SESSION IF NEEDED
+    // ============================================================
     if (!state.sessionId) {
       const sessionRes = await fetch('/api/session/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId })
-    });
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          student_id: studentId
+        })
+      });
 
       if (!sessionRes.ok) {
         const payload = await sessionRes.json().catch(() => ({}));
+
         throw new Error(
           payload.error || 'Unable to start assessment.'
         );
       }
 
-      sessionPayload = await sessionRes.json();
+      const sessionPayload = await sessionRes.json();
 
       state.sessionId = sessionPayload.session_id;
       state.questionLimit = sessionPayload.question_limit || 5;
       state.answeredCount = 0;
     }
 
+    // ============================================================
+    // ASK BACKEND FOR NEXT ADAPTIVE QUESTION
+    // ============================================================
     const questionRes = await fetch(
-    `/api/question/next?student_id=${studentId}&session_id=${state.sessionId}`
+      `/api/question/next?student_id=${encodeURIComponent(studentId)}&session_id=${encodeURIComponent(state.sessionId)}`
     );
 
     if (!questionRes.ok) {
       const payload = await questionRes.json().catch(() => ({}));
-      throw new Error(payload.error || 'Unable to load the next question.');
+
+      throw new Error(
+        payload.error || 'Unable to load the next question.'
+      );
     }
 
     const payload = await questionRes.json();
+
+    // ============================================================
+    // ASSESSMENT COMPLETE
+    // ============================================================
     if (payload.done) {
       state.currentQuestion = null;
-      state.passage = { title: 'Assessment complete', text: payload.message || 'You have completed the available questions.', genre: 'Reading', genreEmoji: '🎉', wordCount: 0 };
-      state.completedMessage = payload.message || 'You completed the available questions.';
+
+      state.completedMessage =
+        payload.message ||
+        'You have completed the available questions.';
+
       state.prediction = null;
       state.screen = 'results';
+
       render();
       return false;
     }
 
-    state.passage = payload.passage ? {
-      id: payload.passage.id,
-      title: payload.passage.title || 'Reading Passage',
-      text: payload.passage.body || '',
-      genre: 'Reading',
-      genreEmoji: '📖',
-      wordCount: Math.max(60, (payload.passage.body || '').split(/\s+/).filter(Boolean).length)
-    } : { title: 'Reading Passage', text: '', genre: 'Reading', genreEmoji: '📖', wordCount: 0 };
+    // ============================================================
+    // UPDATE QUESTION COUNT FROM BACKEND
+    // ============================================================
+    if (payload.question_number) {
+      state.answeredCount = payload.question_number - 1;
+    }
 
+    if (payload.question_limit) {
+      state.questionLimit = payload.question_limit;
+    }
+
+    // ============================================================
+    // PASSAGE HANDLING
+    //
+    // IMPORTANT:
+    // Only replace the displayed passage when the backend says
+    // this question starts a NEW passage.
+    //
+    // Q1 -> Passage 1 -> new_passage = true
+    // Q2 -> Passage 1 -> new_passage = false
+    // Q3 -> Passage 1 -> new_passage = false
+    // Q4 -> Passage 1 -> new_passage = false
+    // Q5 -> Passage 1 -> new_passage = false
+    // Q6 -> Passage 2 -> new_passage = true
+    // ============================================================
+    if (payload.new_passage || !state.passage) {
+
+      if (payload.passage) {
+        state.passage = {
+          id: payload.passage.id,
+          title: payload.passage.title || 'Reading Passage',
+          text: payload.passage.body || '',
+          genre: 'Reading',
+          genreEmoji: '📖',
+          wordCount: Math.max(
+            60,
+            (payload.passage.body || '')
+              .split(/\s+/)
+              .filter(Boolean)
+              .length
+          )
+        };
+      }
+
+      // Start reading timer only when a new passage appears.
+      state.readingStart = Date.now();
+    }
+
+    // ============================================================
+    // STORE CURRENT QUESTION
+    // ============================================================
     state.currentQuestion = {
       id: payload.question_id,
       q: payload.prompt,
       choices: payload.choices || [],
+
       type: {
         literal: 'literal',
         inferential: 'inferential',
@@ -484,21 +557,34 @@ async function loadNextQuestion() {
         main_idea: 'main_idea',
         vocabulary: 'vocabulary'
       }[payload.skill_tag] || 'literal',
+
       skill_tag: payload.skill_tag,
-      difficulty: payload.difficulty,
+      difficulty: payload.difficulty
     };
 
+    // Each question gets its own answer selection.
     state.answers = [];
     state.currentQ = 0;
-    state.readingStart = Date.now();
+
     state.screen = 'questions';
-    return true; 
+
+    return true;
+
   } catch (err) {
+
     console.error(err);
-    alert(err.message || 'Could not load the next question.');
+
+    alert(
+      err.message ||
+      'Could not load the next question.'
+    );
+
     return false;
+
   } finally {
+
     state.isLoading = false;
+
   }
 }
 
@@ -522,47 +608,73 @@ async function nextQuestion() {
   try {
     const response = await fetch('/api/answer', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         student_id: state.userId,
         session_id: state.sessionId,
         question_id: state.currentQuestion?.id,
         chosen_index: state.answers[0],
+
         response_time_sec: Math.max(
-            0,
-            Math.round(
-                (Date.now() - (state.readingStart || Date.now())) / 1000
-            )
+          0,
+          Math.round(
+            (Date.now() - (state.readingStart || Date.now())) / 1000
+          )
         ),
-        reread_count: 0,
-        // sessionId: null,
-        // questionLimit: 5,
-        // answeredCount: 0,
+
+        reread_count: 0
       })
     });
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || 'Unable to save your answer.');
+
+      throw new Error(
+        payload.error ||
+        'Unable to save your answer.'
+      );
     }
 
+    const answerPayload = await response.json();
+
+    // The backend increments AssessmentSession.question_count.
     state.answeredCount += 1;
 
+    // ============================================================
+    // ASSESSMENT HAS REACHED THE 5-QUESTION LIMIT
+    // ============================================================
     if (state.answeredCount >= state.questionLimit) {
-      state.screen = 'results';
+
+      state.currentQuestion = null;
+
       state.completedMessage =
         'Assessment complete. You answered 5 questions.';
+
+      state.screen = 'results';
+
       render();
       return;
     }
 
-    await loadNextQuestion();
-    if (state.screen === 'questions') {
+    // ============================================================
+    // LOAD THE NEXT ADAPTIVE QUESTION
+    // ============================================================
+    const loaded = await loadNextQuestion();
+
+    if (loaded && state.screen === 'questions') {
       render();
     }
+
   } catch (err) {
+
     console.error(err);
-    alert(err.message || 'Could not save your answer.');
+
+    alert(
+      err.message ||
+      'Could not save your answer.'
+    );
   }
 }
 

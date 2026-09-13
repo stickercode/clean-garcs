@@ -127,7 +127,7 @@ class Student(db.Model):
 class Passage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
+    body = db.Column(db.Text)
     category = db.Column(db.String(50))
     grade_band = db.Column(db.Integer)
     cover_image = db.Column(db.String(500))
@@ -430,8 +430,16 @@ def _load_states(student_id):
     return states
 
 
-def _fetch_candidates(skill_tag, difficulty):
-    return Question.query.filter_by(skill_tag=skill_tag, difficulty=difficulty).all()
+def _fetch_candidates(skill_tag, difficulty, passage_id=None):
+    query = Question.query.filter_by(
+        skill_tag=skill_tag,
+        difficulty=difficulty
+    )
+
+    if passage_id is not None:
+        query = query.filter_by(passage_id=passage_id)
+
+    return query.all()
 
 @app.route('/api/passages')
 def get_passages():
@@ -552,19 +560,28 @@ def assessment_passages():
 
 # =====================================
 # ADAPTIVE QUESTION SELECTION
+# ONE PASSAGE AT A TIME
 # =====================================
 @app.route('/api/question/next')
 def question_next():
     student_id = request.args.get("student_id", type=int)
     session_id = request.args.get("session_id", type=int)
 
-    # Validate student
+    # -------------------------------------------------
+    # VALIDATE STUDENT
+    # -------------------------------------------------
     if not student_id or not Student.query.get(student_id):
-        return jsonify({"error": "valid student_id required"}), 400
+        return jsonify({
+            "error": "valid student_id required"
+        }), 400
 
-    # Validate session
+    # -------------------------------------------------
+    # VALIDATE SESSION
+    # -------------------------------------------------
     if not session_id:
-        return jsonify({"error": "valid session_id required"}), 400
+        return jsonify({
+            "error": "valid session_id required"
+        }), 400
 
     assessment = AssessmentSession.query.filter_by(
         id=session_id,
@@ -572,9 +589,13 @@ def question_next():
     ).first()
 
     if not assessment:
-        return jsonify({"error": "assessment session not found"}), 404
+        return jsonify({
+            "error": "assessment session not found"
+        }), 404
 
-    # HARD LIMIT: 5 questions per assessment
+    # -------------------------------------------------
+    # HARD LIMIT: 5 QUESTIONS PER ASSESSMENT
+    # -------------------------------------------------
     if assessment.question_count >= 5:
         if not assessment.completed_at:
             assessment.completed_at = datetime.utcnow()
@@ -587,7 +608,9 @@ def question_next():
             "question_limit": 5
         })
 
-    # Load current mastery states
+    # -------------------------------------------------
+    # LOAD CURRENT MASTERY STATES
+    # -------------------------------------------------
     states = _load_states(student_id)
 
     if not states:
@@ -595,8 +618,9 @@ def question_next():
             "error": "skill states not initialized — call /api/session/start first"
         }), 400
 
-    # IMPORTANT:
-    # Only exclude questions answered during THIS assessment.
+    # -------------------------------------------------
+    # QUESTIONS ALREADY ANSWERED IN THIS ASSESSMENT
+    # -------------------------------------------------
     answered_ids = [
         r.question_id
         for r in Response.query.filter_by(
@@ -605,85 +629,256 @@ def question_next():
         ).all()
     ]
 
-    question, skill_tag, difficulty = pick_next_question(
-        states,
-        _fetch_candidates,
-        answered_ids
-    )
-
-    print("Questions in DB:", Question.query.count())
-
-    print(
-        "literal-medium:",
-        len(_fetch_candidates("literal", "medium"))
-    )
-
-    print(
-        "literal-easy:",
-        len(_fetch_candidates("literal", "easy"))
-    )
-
-    print(
-        "inferential-medium:",
-        len(_fetch_candidates("inferential", "medium"))
-    )
-
-    print(
-        "critical-medium:",
-        len(_fetch_candidates("critical", "medium"))
-    )
-
-    print("States:")
-    for s in states.values():
-        print(s.skill_tag, s.mastery)
-
-    print("Answered this session:", answered_ids)
-
-    print("Chosen skill:", skill_tag)
-    print("Chosen difficulty:", difficulty)
-    print("Question:", question)
+    answered_set = set(answered_ids)
 
     # -------------------------------------------------
-    # FALLBACK 1: relax difficulty
+    # DETERMINE CURRENT PASSAGE
+    #
+    # We do not need a new database column.
+    # The current passage is determined from the most
+    # recently answered question in this assessment.
+    #
+    # If there are no responses yet, this is the first
+    # question and therefore there is no current passage.
     # -------------------------------------------------
-    if question is None:
-        tried = {difficulty}
-        relaxed = relax_difficulty(difficulty)
+    latest_response = (
+        Response.query
+        .filter_by(
+            student_id=student_id,
+            session_id=session_id
+        )
+        .order_by(Response.id.desc())
+        .first()
+    )
 
-        while (
-            question is None
-            and relaxed
-            and relaxed not in tried
-        ):
-            tried.add(relaxed)
+    current_passage_id = None
 
-            candidates = [
-                q
-                for q in _fetch_candidates(skill_tag, relaxed)
-                if q.id not in set(answered_ids)
-            ]
+    if latest_response:
+        latest_question = Question.query.get(
+            latest_response.question_id
+        )
 
-            if candidates:
-                question = random.choice(candidates)
-                difficulty = relaxed
-            else:
-                relaxed = relax_difficulty(relaxed)
-
-    # -------------------------------------------------
-    # FALLBACK 2: any unanswered question
-    # -------------------------------------------------
-    if question is None:
-        remaining = Question.query.filter(
-            ~Question.id.in_(answered_ids or [-1])
-        ).all()
-
-        if remaining:
-            question = random.choice(remaining)
-            skill_tag = question.skill_tag
-            difficulty = question.difficulty
+        if latest_question:
+            current_passage_id = latest_question.passage_id
 
     # -------------------------------------------------
-    # No question available
+    # FUNCTION USED BY THE ADAPTIVE ENGINE
+    #
+    # If current_passage_id exists, adaptive selection
+    # is restricted to that passage.
+    # -------------------------------------------------
+    if current_passage_id is not None:
+
+        def fetch_current_passage(skill_tag, difficulty):
+            return _fetch_candidates(
+                skill_tag,
+                difficulty,
+                current_passage_id
+            )
+
+        # -------------------------------------------------
+        # TRY ADAPTIVE SELECTION WITHIN CURRENT PASSAGE
+        # -------------------------------------------------
+        question, skill_tag, difficulty = pick_next_question(
+            states,
+            fetch_current_passage,
+            answered_ids
+        )
+
+        # -------------------------------------------------
+        # FALLBACK 1:
+        # RELAX DIFFICULTY BUT STAY IN SAME PASSAGE
+        # -------------------------------------------------
+        if question is None:
+
+            tried = {difficulty}
+            relaxed = relax_difficulty(difficulty)
+
+            while (
+                question is None
+                and relaxed
+                and relaxed not in tried
+            ):
+                tried.add(relaxed)
+
+                candidates = [
+                    q
+                    for q in _fetch_candidates(
+                        skill_tag,
+                        relaxed,
+                        current_passage_id
+                    )
+                    if q.id not in answered_set
+                ]
+
+                if candidates:
+                    question = random.choice(candidates)
+                    difficulty = relaxed
+                else:
+                    relaxed = relax_difficulty(relaxed)
+
+        # -------------------------------------------------
+        # FALLBACK 2:
+        # ANY UNANSWERED QUESTION FROM CURRENT PASSAGE
+        #
+        # IMPORTANT:
+        # We do NOT leave the passage here.
+        # -------------------------------------------------
+        if question is None:
+
+            remaining = (
+                Question.query
+                .filter(
+                    Question.passage_id == current_passage_id,
+                    ~Question.id.in_(answered_ids or [-1])
+                )
+                .all()
+            )
+
+            if remaining:
+                question = random.choice(remaining)
+                skill_tag = question.skill_tag
+                difficulty = question.difficulty
+
+        # -------------------------------------------------
+        # CURRENT PASSAGE IS EXHAUSTED
+        #
+        # Only now are we allowed to select another
+        # passage.
+        # -------------------------------------------------
+        if question is None:
+
+            question, skill_tag, difficulty = pick_next_question(
+                states,
+                _fetch_candidates,
+                answered_ids
+            )
+
+            new_passage = True
+
+            # -------------------------------------------------
+            # FALLBACK 3:
+            # GLOBAL DIFFICULTY RELAXATION
+            # -------------------------------------------------
+            if question is None:
+
+                tried = {difficulty}
+                relaxed = relax_difficulty(difficulty)
+
+                while (
+                    question is None
+                    and relaxed
+                    and relaxed not in tried
+                ):
+                    tried.add(relaxed)
+
+                    candidates = [
+                        q
+                        for q in _fetch_candidates(
+                            skill_tag,
+                            relaxed
+                        )
+                        if q.id not in answered_set
+                    ]
+
+                    if candidates:
+                        question = random.choice(candidates)
+                        difficulty = relaxed
+                    else:
+                        relaxed = relax_difficulty(relaxed)
+
+            # -------------------------------------------------
+            # FALLBACK 4:
+            # ANY UNANSWERED QUESTION FROM ANY PASSAGE
+            # -------------------------------------------------
+            if question is None:
+
+                remaining = (
+                    Question.query
+                    .filter(
+                        ~Question.id.in_(answered_ids or [-1])
+                    )
+                    .all()
+                )
+
+                if remaining:
+                    question = random.choice(remaining)
+                    skill_tag = question.skill_tag
+                    difficulty = question.difficulty
+
+        else:
+            # We found another question in the same passage.
+            new_passage = False
+
+    else:
+        # -------------------------------------------------
+        # FIRST QUESTION OF THE ASSESSMENT
+        #
+        # No passage has been established yet.
+        # The normal adaptive engine chooses the first
+        # question, and that question establishes the
+        # first passage.
+        # -------------------------------------------------
+        question, skill_tag, difficulty = pick_next_question(
+            states,
+            _fetch_candidates,
+            answered_ids
+        )
+
+        new_passage = True
+
+        # -------------------------------------------------
+        # FALLBACK 1:
+        # RELAX DIFFICULTY
+        # -------------------------------------------------
+        if question is None:
+
+            tried = {difficulty}
+            relaxed = relax_difficulty(difficulty)
+
+            while (
+                question is None
+                and relaxed
+                and relaxed not in tried
+            ):
+                tried.add(relaxed)
+
+                candidates = [
+                    q
+                    for q in _fetch_candidates(
+                        skill_tag,
+                        relaxed
+                    )
+                    if q.id not in answered_set
+                ]
+
+                if candidates:
+                    question = random.choice(candidates)
+                    difficulty = relaxed
+                else:
+                    relaxed = relax_difficulty(relaxed)
+
+        # -------------------------------------------------
+        # FALLBACK 2:
+        # ANY UNANSWERED QUESTION
+        # -------------------------------------------------
+        if question is None:
+
+            remaining = (
+                Question.query
+                .filter(
+                    ~Question.id.in_(answered_ids or [-1])
+                )
+                .all()
+            )
+
+            if remaining:
+                question = random.choice(remaining)
+                skill_tag = question.skill_tag
+                difficulty = question.difficulty
+
+    # -------------------------------------------------
+    # NO QUESTION AVAILABLE
     # -------------------------------------------------
     if question is None:
         return jsonify({
@@ -693,22 +888,51 @@ def question_next():
             "question_limit": 5
         })
 
+    # -------------------------------------------------
+    # GET PASSAGE FOR SELECTED QUESTION
+    # -------------------------------------------------
     passage = Passage.query.get(question.passage_id)
 
+    if not passage:
+        return jsonify({
+            "error": "passage not found for selected question"
+        }), 404
+
+    # -------------------------------------------------
+    # DETERMINE WHETHER THIS QUESTION STARTS A NEW
+    # PASSAGE
+    # -------------------------------------------------
+    if current_passage_id is None:
+        new_passage = True
+    elif question.passage_id != current_passage_id:
+        new_passage = True
+    else:
+        new_passage = False
+
+    # -------------------------------------------------
+    # RESPONSE
+    # -------------------------------------------------
     return jsonify({
         "question_id": question.id,
         "prompt": question.prompt,
-        "choices": question.choices,
+        "choices": question.choices or [],
         "skill_tag": skill_tag,
         "difficulty": difficulty,
+
         "question_number": assessment.question_count + 1,
         "question_limit": 5,
+
+        # Frontend should only replace the displayed
+        # passage when this is True.
+        "new_passage": new_passage,
+
         "passage": {
             "id": passage.id,
             "title": passage.title,
-            "body": passage.body,
-        } if passage else None,
+            "body": passage.body or "",
+        }
     })
+
    
 
 
