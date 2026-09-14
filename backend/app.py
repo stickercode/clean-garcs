@@ -128,17 +128,38 @@ class Passage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
     body = db.Column(db.Text)
+    grade_band = db.Column(db.Integer)
+
+class LibraryBook(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    title = db.Column(db.String(200), nullable=False)
+    author = db.Column(db.String(200))
+    description = db.Column(db.Text)
     category = db.Column(db.String(50))
     grade_band = db.Column(db.Integer)
     cover_image = db.Column(db.String(500))
     is_featured = db.Column(db.Boolean, default=False)
 
     chapters = db.relationship(
-        "Chapter",
-        backref="passage",
+        "LibraryChapter",
+        backref="book",
         lazy=True,
         cascade="all, delete-orphan"
     )
+
+class LibraryChapter(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    book_id = db.Column(
+        db.Integer,
+        db.ForeignKey("library_book.id"),
+        nullable=False
+    )
+
+    chapter_number = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
 
 class Chapter(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -162,9 +183,9 @@ class ReadingProgress(db.Model):
         nullable=False
     )
 
-    passage_id = db.Column(
+    book_id = db.Column(
         db.Integer,
-        db.ForeignKey("passage.id"),
+        db.ForeignKey("library_book.id"),
         nullable=False
     )
 
@@ -441,8 +462,8 @@ def _fetch_candidates(skill_tag, difficulty, passage_id=None):
 
     return query.all()
 
-@app.route('/api/passages')
-def get_passages():
+@app.route('/api/library/books')
+def get_library_books():
     student_id = request.args.get("student_id", type=int)
 
     if not student_id:
@@ -457,19 +478,19 @@ def get_passages():
             "error": "student not found"
         }), 404
 
-    passages = Passage.query.order_by(Passage.id).all()
+    books = LibraryBook.query.order_by(LibraryBook.id).all()
 
     result = []
 
-    for passage in passages:
+    for book in books:
 
-        chapter_count = Chapter.query.filter_by(
-            passage_id=passage.id
+        chapter_count = LibraryChapter.query.filter_by(
+            book_id=book.id
         ).count()
 
         progress = ReadingProgress.query.filter_by(
             student_id=student_id,
-            passage_id=passage.id
+            book_id=book.id
         ).first()
 
         completed_chapters = (
@@ -498,20 +519,20 @@ def get_passages():
         }
 
         result.append({
-            "id": passage.id,
-            "title": passage.title,
-            "description": passage.description,
-            "category": passage.category,
+            "id": book.id,
+            "title": book.title,
+            "description": book.description,
+            "category": book.category,
             "grade_band": grade_labels.get(
-                passage.grade_band,
+                book.grade_band,
                 "All Grades"
             ),
             "chapter_count": chapter_count,
             "completed_chapters": completed_chapters,
             "progress_percent": progress_percent,
             "completion_state": completion_state,
-            "cover_image": passage.cover_image,
-            "is_featured": passage.is_featured
+            "cover_image": book.cover_image,
+            "is_featured": book.is_featured
         })
 
     return jsonify(result)

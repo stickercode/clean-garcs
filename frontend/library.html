@@ -190,7 +190,7 @@
         }
 
         const response = await fetch(
-            `/api/passages?student_id=${encodeURIComponent(studentId)}`
+           `/api/library/books?student_id=${encodeURIComponent(studentId)}`
         );
 
         if (!response.ok) {
