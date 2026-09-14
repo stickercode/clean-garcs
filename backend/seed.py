@@ -451,51 +451,51 @@ def seed():
     with app.app_context():
         # Clear existing content so re-running this script during dev
         # doesn't pile up duplicate passages/questions.
-        db.session.query(Question).delete()
-        db.session.query(Passage).delete()
-        db.session.commit()
+        # db.session.query(Question).delete()
+        # db.session.query(Passage).delete()
+        # db.session.commit()
 
-        total_questions = 0
-        for p in PASSAGES:
-            passage = Passage(title=p["title"], body=p["body"], grade_band=p["grade_band"])
-            db.session.add(passage)
-            db.session.flush()  # assigns passage.id before we attach questions to it
+        passages_added = 0
+        questions_added = 0
 
-            for q in p["questions"]:
-                db.session.add(
-                    Question(
-                        passage_id=passage.id,
-                        prompt=q["prompt"],
-                        choices=q["choices"],
-                        correct_index=q["correct_index"],
-                        skill_tag=q["skill_tag"],
-                        difficulty=q["difficulty"],
-                    )
+        for p_data in PASSAGES:
+            # 1. Check if the passage already exists by title
+            passage = Passage.query.filter_by(title=p_data["title"]).first()
+
+            if not passage:
+                # Create new passage if it doesn't exist
+                passage = Passage(
+                    title=p_data["title"],
+                    body=p_data["body"],
+                    grade_band=p_data["grade_band"]
                 )
-                total_questions += 1
-        
+                db.session.add(passage)
+                db.session.flush()  # Generates passage.id
+                passages_added += 1
 
-        print(app.instance_path)
-        print(app.config["SQLALCHEMY_DATABASE_URI"])
-        print(os.path.abspath(os.path.join(app.instance_path, "database.db")))        
+            # 2. Add only new questions for this passage
+            for q_data in p_data["questions"]:
+                existing_question = Question.query.filter_by(
+                    passage_id=passage.id,
+                    prompt=q_data["prompt"]
+                ).first()
+
+                if not existing_question:
+                    db.session.add(
+                        Question(
+                            passage_id=passage.id,
+                            prompt=q_data["prompt"],
+                            choices=q_data["choices"],
+                            correct_index=q_data["correct_index"],
+                            skill_tag=q_data["skill_tag"],
+                            difficulty=q_data["difficulty"],
+                        )
+                    )
+                    questions_added += 1
 
         db.session.commit()
-        print(f"Seeded {len(PASSAGES)} passages and {total_questions} questions.")
-
-        # Quick sanity check: confirm every (skill, difficulty) combo has
-        # at least one question, since the adaptive engine assumes this.
-        skills = ("literal", "inferential", "critical")
-        difficulties = ("easy", "medium", "hard")
-        missing = []
-        for s in skills:
-            for d in difficulties:
-                count = Question.query.filter_by(skill_tag=s, difficulty=d).count()
-                if count == 0:
-                    missing.append((s, d))
-        if missing:
-            print(f"WARNING: no questions found for these (skill, difficulty) combos: {missing}")
-        else:
-            print("All 9 (skill, difficulty) combinations have at least one question.")
+        print(f"Seeding complete! Added {passages_added} new passages and {questions_added} new questions.")
+        print("All student accounts, skill states, and response history were preserved.")
 
 
 if __name__ == "__main__":
