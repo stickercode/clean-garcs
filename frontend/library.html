@@ -177,51 +177,39 @@
     window.location.href = '/login';
   }
 
-  async function loadPassages() {
+  async function loadBooks() {
+    const student = JSON.parse(
+        localStorage.getItem("garcs_student") || "{}"
+    );
+
+    if (!student.student_id) {
+        console.error("No student ID found.");
+        return;
+    }
+
     try {
-        const student = JSON.parse(
-            localStorage.getItem("garcs_student") || "{}"
-        );
-
-        const studentId = student.student_id;
-
-        if (!studentId) {
-            throw new Error("Student ID not found");
-        }
-
         const response = await fetch(
-           `/api/library/books?student_id=${encodeURIComponent(studentId)}`
+            `/api/library/books?student_id=${student.student_id}`
         );
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-
-            throw new Error(
-                errorData.error || `Failed to load passages (${response.status})`
-            );
+            throw new Error(`Failed to load books (${response.status})`);
         }
 
-        const passages = await response.json();
+        const books = await response.json();
 
-        renderPassages(passages);
-
+        renderBooks(books);
     } catch (error) {
-        console.error("Error loading passages:", error);
-
-        document.getElementById("passageGrid").innerHTML = `
-            <p class="text-red-600">
-                Unable to load the library.
-            </p>
-        `;
+        console.error("Error loading books:", error);
     }
 }
 
-  function renderPassages(passages) {
+  function renderBooks(books) {
     const grid = document.getElementById("passageGrid");
 
     grid.innerHTML = "";
 
-    passages.forEach(passage => {
+    books.forEach(book => {
         const card = document.createElement("div");
 
         card.className =
@@ -232,8 +220,8 @@
         card.innerHTML = `
             <div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
                 <img
-                    src="${passage.cover_image || '/static/images/default-book.jpg'}"
-                    alt="${passage.title}"
+                    src="${book.cover_image || '/static/images/default-book.jpg'}"
+                    alt="${book.title}"
                     class="w-full h-full object-cover"
                 >
             </div>
@@ -241,25 +229,25 @@
             <div class="flex flex-col justify-center flex-1">
 
                 <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">
-                    ${passage.category || "Reading"}
+                    ${book.category || "Reading"}
                 </span>
 
                 <h4 class="font-headline font-bold text-on-surface text-base">
-                    ${passage.title}
+                    ${book.title}
                 </h4>
 
                 <p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-2">
-                    ${passage.description || ""}
+                    ${book.description || ""}
                 </p>
 
                 <div class="flex items-center gap-2 flex-wrap">
 
                     <span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">
-                        ${passage.grade_band}
+                        ${book.grade_band}
                     </span>
 
                     <span class="text-[10px] text-outline">
-                        ${passage.chapter_count} chapters
+                        ${book.chapter_count} chapters
                     </span>
 
                 </div>
@@ -268,18 +256,18 @@
 
                     <div class="flex justify-between text-[10px] mb-1">
                         <span class="text-outline">
-                            ${passage.completion_state}
+                            ${book.completion_state}
                         </span>
 
                         <span class="font-bold">
-                            ${passage.progress_percent}%
+                            ${book.progress_percent}%
                         </span>
                     </div>
 
                     <div class="w-full h-2 bg-surface-container rounded-full overflow-hidden">
                         <div
                             class="h-full bg-primary rounded-full"
-                            style="width: ${passage.progress_percent}%"
+                            style="width: ${book.progress_percent}%"
                         ></div>
                     </div>
 
@@ -290,14 +278,14 @@
 
         card.addEventListener("click", () => {
             window.location.href =
-                `/reading.html?passage_id=${book.id}`;
+                `/reading.html?book_id=${book.id}`;
         });
 
         grid.appendChild(card);
     });
 }
 
-  // Load passages when the page is ready
-  document.addEventListener("DOMContentLoaded", loadPassages);
+  // Load books when the page is ready
+  document.addEventListener("DOMContentLoaded", loadBooks);
 </script>
 </body></html>
