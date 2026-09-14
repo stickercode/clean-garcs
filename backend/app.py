@@ -289,11 +289,202 @@ with app.app_context():
 
 
 # =====================================
-# GAMIFICATION CONSTANTS (Phase 5 will expand on this, not replace it)
+# GAMIFICATION / BADGE HELPERS
 # =====================================
+
 POINTS_CORRECT = 10
 POINTS_BAND_UP = 25
-BAND_RANK = {"Weak": 0, "Developing": 1, "Strong": 2}
+BAND_RANK = {
+    "Weak": 0,
+    "Developing": 1,
+    "Strong": 2
+}
+
+
+# -------------------------------------------------
+# BADGE DEFINITIONS
+# -------------------------------------------------
+BADGE_RULES = {
+    "three_in_a_row": {
+        "name": "3 Correct in a Row",
+        "icon": "local_fire_department",
+    },
+    "first_strong": {
+        "name": "First Strong Skill",
+        "icon": "workspace_premium",
+    },
+    "five_passages": {
+        "name": "5 Passages Completed",
+        "icon": "auto_stories",
+    },
+}
+
+
+# -------------------------------------------------
+# BADGE RULE: 3 CORRECT IN A ROW
+# -------------------------------------------------
+def has_three_correct_in_a_row(student_id):
+    """
+    Returns True if the student's three most recent
+    recorded responses were all correct.
+    """
+
+    recent_responses = (
+        Response.query
+        .filter_by(student_id=student_id)
+        .order_by(Response.timestamp.desc(), Response.id.desc())
+        .limit(3)
+        .all()
+    )
+
+    if len(recent_responses) < 3:
+        return False
+
+    return all(response.is_correct for response in recent_responses)
+
+
+# -------------------------------------------------
+# BADGE RULE: FIRST STRONG SKILL
+# -------------------------------------------------
+def has_first_strong_skill(student_id):
+    """
+    Returns True once at least one reading skill has
+    reached the Strong mastery band.
+    """
+
+    strong_skill = (
+        StudentSkillState.query
+        .filter(
+            StudentSkillState.student_id == student_id,
+            StudentSkillState.mastery >= 0.70
+        )
+        .first()
+    )
+
+    return strong_skill is not None
+
+
+# -------------------------------------------------
+# BADGE RULE: 5 PASSAGES COMPLETED
+# -------------------------------------------------
+def get_completed_passage_count(student_id):
+    """
+    A passage is considered completed only when the
+    student has answered every question belonging to
+    that passage.
+
+    This uses all historical responses for the student,
+    not just the current assessment session.
+    """
+
+    passage_rows = (
+        db.session.query(Passage.id)
+        .join(
+            Question,
+            Question.passage_id == Passage.id
+        )
+        .distinct()
+        .all()
+    )
+
+    completed_count = 0
+
+    for row in passage_rows:
+        passage_id = row[0]
+
+        # All questions belonging to this passage
+        question_ids = {
+            question.id
+            for question in Question.query.filter_by(
+                passage_id=passage_id
+            ).all()
+        }
+
+        if not question_ids:
+            continue
+
+        # Questions this student has answered
+        answered_ids = {
+            response.question_id
+            for response in Response.query.filter(
+                Response.student_id == student_id,
+                Response.question_id.in_(question_ids)
+            ).all()
+        }
+
+        # Passage is complete only if every question
+        # belonging to it has been answered.
+        if question_ids.issubset(answered_ids):
+            completed_count += 1
+
+    return completed_count
+
+
+def has_five_completed_passages(student_id):
+    """
+    Returns True once the student has completely answered
+    all questions from at least five different passages.
+    """
+
+    return get_completed_passage_count(student_id) >= 5
+
+
+# -------------------------------------------------
+# GET ALL BADGES EARNED BY A STUDENT
+# -------------------------------------------------
+def get_student_badges(student_id):
+    """
+    Calculates all badges currently earned by the student.
+
+    No badge database table is required for this MVP.
+    """
+
+    badges = []
+
+    if has_three_correct_in_a_row(student_id):
+        badges.append({
+            "id": "three_in_a_row",
+            "name": BADGE_RULES["three_in_a_row"]["name"],
+            "icon": BADGE_RULES["three_in_a_row"]["icon"],
+        })
+
+    if has_first_strong_skill(student_id):
+        badges.append({
+            "id": "first_strong",
+            "name": BADGE_RULES["first_strong"]["name"],
+            "icon": BADGE_RULES["first_strong"]["icon"],
+        })
+
+    if has_five_completed_passages(student_id):
+        badges.append({
+            "id": "five_passages",
+            "name": BADGE_RULES["five_passages"]["name"],
+            "icon": BADGE_RULES["five_passages"]["icon"],
+        })
+
+    return badges
+
+
+# -------------------------------------------------
+# FIND NEWLY EARNED BADGES
+# -------------------------------------------------
+def get_new_badges(previous_badges, current_badges):
+    """
+    Compares badge lists before and after an answer so
+    /api/answer can tell the frontend which badge was
+    newly unlocked.
+    """
+
+    previous_ids = {
+        badge["id"]
+        for badge in previous_badges
+    }
+
+    return [
+        badge
+        for badge in current_badges
+        if badge["id"] not in previous_ids
+    ]
 
 
 # =====================================
@@ -1377,21 +1568,56 @@ def question_next():
     })
 
 # =====================================
-# ANSWER SUBMISSION -- logs Response, updates mastery, awards points
+# ANSWER SUBMISSION
+# Logs Response, updates mastery,
+# awards points, and evaluates badges
 # =====================================
 @app.route('/api/answer', methods=['POST'])
 def answer():
+
     data = request.json or {}
+
     student_id = data.get("student_id")
     session_id = data.get("session_id")
     question_id = data.get("question_id")
     chosen_index = data.get("chosen_index")
-    response_time_sec = data.get("response_time_sec", 0.0)
-    reread_count = data.get("reread_count", 0)
+
+    response_time_sec = data.get(
+        "response_time_sec",
+        0.0
+    )
+
+    reread_count = data.get(
+        "reread_count",
+        0
+    )
+
+    # =================================================
+    # VALIDATE STUDENT
+    # =================================================
+    if not student_id:
+        return jsonify({
+            "error": "valid student_id required"
+        }), 400
+
+    student = Student.query.get(student_id)
+
+    if not student:
+        return jsonify({
+            "error": "student not found"
+        }), 404
+
+    # =================================================
+    # VALIDATE SESSION
+    # =================================================
+    if not session_id:
+        return jsonify({
+            "error": "valid session_id required"
+        }), 400
 
     assessment = AssessmentSession.query.filter_by(
-    id=session_id,
-    student_id=student_id
+        id=session_id,
+        student_id=student_id
     ).first()
 
     if not assessment:
@@ -1399,35 +1625,162 @@ def answer():
             "error": "assessment session not found"
         }), 404
 
+    # =================================================
+    # HARD LIMIT: 10 QUESTIONS PER ASSESSMENT
+    # =================================================
     if assessment.question_count >= 10:
+
+        if not assessment.completed_at:
+            assessment.completed_at = datetime.utcnow()
+            db.session.commit()
+
         return jsonify({
             "error": "assessment already completed"
         }), 400
 
+    # =================================================
+    # VALIDATE QUESTION
+    # =================================================
+    if not question_id:
+        return jsonify({
+            "error": "question_id required"
+        }), 400
+
     question = Question.query.get(question_id)
+
     if not question:
-        return jsonify({"error": "question not found"}), 404
+        return jsonify({
+            "error": "question not found"
+        }), 404
 
-    skill_row = StudentSkillState.query.filter_by(student_id=student_id, skill_tag=question.skill_tag).first()
+    # =================================================
+    # VALIDATE ANSWER INDEX
+    # =================================================
+    if chosen_index is None:
+        return jsonify({
+            "error": "chosen_index required"
+        }), 400
+
+    try:
+        chosen_index = int(chosen_index)
+    except (TypeError, ValueError):
+        return jsonify({
+            "error": "chosen_index must be an integer"
+        }), 400
+
+    if not question.choices:
+        return jsonify({
+            "error": "question has no answer choices"
+        }), 400
+
+    if (
+        chosen_index < 0
+        or chosen_index >= len(question.choices)
+    ):
+        return jsonify({
+            "error": "chosen_index is outside the available choices"
+        }), 400
+
+    # =================================================
+    # PREVENT DUPLICATE ANSWERING
+    #
+    # The frontend should normally never submit the same
+    # question twice, but this protects the database if
+    # the request is accidentally repeated.
+    # =================================================
+    existing_response = Response.query.filter_by(
+        student_id=student_id,
+        session_id=session_id,
+        question_id=question_id
+    ).first()
+
+    if existing_response:
+        return jsonify({
+            "error": "question already answered in this assessment"
+        }), 409
+
+    # =================================================
+    # GET STUDENT'S SKILL STATE
+    # =================================================
+    skill_row = StudentSkillState.query.filter_by(
+        student_id=student_id,
+        skill_tag=question.skill_tag
+    ).first()
+
     if not skill_row:
-        return jsonify({"error": "skill state not initialized — call /api/session/start first"}), 400
+        return jsonify({
+            "error": (
+                "skill state not initialized — "
+                "call /api/session/start first"
+            )
+        }), 400
 
-    is_correct = (chosen_index == question.correct_index)
+    # =================================================
+    # CAPTURE BADGES BEFORE THIS ANSWER
+    # =================================================
+    badges_before = get_student_badges(student_id)
 
+    # =================================================
+    # CHECK ANSWER
+    # =================================================
+    is_correct = (
+        chosen_index == question.correct_index
+    )
+
+    # =================================================
+    # UPDATE MASTERY
+    # =================================================
     mastery_before = skill_row.mastery
-    mastery_after = update_mastery(mastery_before, is_correct, question.difficulty)
-    band_before = classify_band(mastery_before)
-    band_after = classify_band(mastery_after)
 
-    points_earned = POINTS_CORRECT if is_correct else 0
-    leveled_up = BAND_RANK[band_after.value] > BAND_RANK[band_before.value]
+    mastery_after = update_mastery(
+        mastery_before,
+        is_correct,
+        question.difficulty
+    )
+
+    band_before = classify_band(
+        mastery_before
+    )
+
+    band_after = classify_band(
+        mastery_after
+    )
+
+    # =================================================
+    # CALCULATE POINTS
+    #
+    # Correct answer = +10
+    # Moving up mastery band = +25 bonus
+    # =================================================
+    points_earned = (
+        POINTS_CORRECT
+        if is_correct
+        else 0
+    )
+
+    leveled_up = (
+        BAND_RANK[band_after.value]
+        >
+        BAND_RANK[band_before.value]
+    )
+
     if leveled_up:
         points_earned += POINTS_BAND_UP
 
+    # =================================================
+    # UPDATE STUDENT SKILL STATE
+    # =================================================
     skill_row.mastery = mastery_after
-    skill_row.points = (skill_row.points or 0) + points_earned
 
-    db.session.add(Response(
+    skill_row.points = (
+        (skill_row.points or 0)
+        + points_earned
+    )
+
+    # =================================================
+    # LOG RESPONSE
+    # =================================================
+    response = Response(
         session_id=session_id,
         student_id=student_id,
         question_id=question_id,
@@ -1438,25 +1791,169 @@ def answer():
         reread_count=reread_count,
         mastery_before=mastery_before,
         mastery_after=mastery_after,
-    ))
+    )
 
+    db.session.add(response)
+
+    # =================================================
+    # UPDATE ASSESSMENT QUESTION COUNT
+    # =================================================
     assessment.question_count += 1
 
+    # =================================================
+    # COMPLETE ASSESSMENT AT 10 QUESTIONS
+    # =================================================
     if assessment.question_count >= 10:
         assessment.completed_at = datetime.utcnow()
 
+    # =================================================
+    # SAVE EVERYTHING
+    # =================================================
+    try:
+        db.session.commit()
 
-    db.session.commit()
+    except Exception as e:
+        db.session.rollback()
 
+        print(
+            "ANSWER COMMIT ERROR:",
+            repr(e)
+        )
+
+        return jsonify({
+            "error": "unable to save answer"
+        }), 500
+
+    # =================================================
+    # CALCULATE BADGES AFTER ANSWER
+    # =================================================
+    badges_after = get_student_badges(
+        student_id
+    )
+
+    newly_earned_badges = get_new_badges(
+        badges_before,
+        badges_after
+    )
+
+    # =================================================
+    # PASSAGE COMPLETION STATUS
+    #
+    # Determine whether the passage associated with this
+    # question has now been completely answered.
+    # =================================================
+    passage_completed = False
+    completed_passage_count = 0
+
+    if question.passage_id is not None:
+
+        passage_question_ids = {
+            q.id
+            for q in Question.query.filter_by(
+                passage_id=question.passage_id
+            ).all()
+        }
+
+        answered_passage_question_ids = {
+            r.question_id
+            for r in Response.query.filter(
+                Response.student_id == student_id,
+                Response.question_id.in_(
+                    passage_question_ids
+                )
+            ).all()
+        }
+
+        if (
+            passage_question_ids
+            and
+            passage_question_ids.issubset(
+                answered_passage_question_ids
+            )
+        ):
+            passage_completed = True
+
+    # Only calculate this when the badge could potentially
+    # be relevant. This also keeps the response useful to
+    # the frontend.
+    if len(badges_after) >= 0:
+        completed_passage_count = (
+            get_completed_passage_count(
+                student_id
+            )
+        )
+
+    # =================================================
+    # RESPONSE
+    # =================================================
     return jsonify({
+
+        # ---------------------------------------------
+        # ANSWER RESULT
+        # ---------------------------------------------
         "is_correct": is_correct,
         "correct_index": question.correct_index,
-        "mastery_before": round(mastery_before, 3),
-        "mastery_after": round(mastery_after, 3),
-        "band_before": band_before.value,
-        "band_after": band_after.value,
+
+        # ---------------------------------------------
+        # MASTERY
+        # ---------------------------------------------
+        "mastery_before": round(
+            mastery_before,
+            3
+        ),
+
+        "mastery_after": round(
+            mastery_after,
+            3
+        ),
+
+        "band_before": (
+            band_before.value
+        ),
+
+        "band_after": (
+            band_after.value
+        ),
+
         "leveled_up": leveled_up,
+
+        # ---------------------------------------------
+        # POINTS
+        # ---------------------------------------------
         "points_earned": points_earned,
+
+        # ---------------------------------------------
+        # ASSESSMENT PROGRESS
+        # ---------------------------------------------
+        "question_count": (
+            assessment.question_count
+        ),
+
+        "question_limit": 10,
+
+        "assessment_completed": (
+            assessment.completed_at is not None
+        ),
+
+        # ---------------------------------------------
+        # PASSAGE / QUEST PROGRESS
+        # ---------------------------------------------
+        "passage_id": question.passage_id,
+
+        "passage_completed": passage_completed,
+
+        "completed_passage_count": (
+            completed_passage_count
+        ),
+
+        # ---------------------------------------------
+        # BADGES
+        # ---------------------------------------------
+        "badges": badges_after,
+
+        "newly_earned_badges": (
+            newly_earned_badges
+        ),
     })
 
 
@@ -1506,7 +2003,7 @@ def progress_api(student_id):
         "grade": student.grade,
         "skills": skills,
         "total_points": total_points,
-        "badges": [],  # Phase 5 populates this from a real badge-rule table
+        "badges": get_student_badges(student_id),
         "history": history,
     })
 
