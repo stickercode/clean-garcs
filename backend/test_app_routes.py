@@ -53,7 +53,7 @@ def test_session_start_and_question_next_return_content(client):
     session_data = session_response.get_json()
 
     assert 'session_id' in session_data
-    assert session_data['question_limit'] == 5
+    assert session_data['question_limit'] == 10
 
     session_id = session_data['session_id']
 
