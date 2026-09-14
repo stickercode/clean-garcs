@@ -127,7 +127,7 @@ def test_answer_and_progress_use_student_id_from_request(client):
     assert progress_payload['student_id'] == student.id
     assert progress_payload['badges'] == []
 
-def test_assessment_stops_after_five_questions(client):
+def test_assessment_stops_after_ten_questions(client):
     with app.app_context():
         student = Student(
             username='fivequestionstudent',
@@ -168,7 +168,7 @@ def test_assessment_stops_after_five_questions(client):
 
         assert question['question_id']
         assert question['question_number'] == question_number
-        assert question['question_limit'] == 5
+        assert question['question_limit'] == 10
 
         answer_response = client.post(
             '/api/answer',
@@ -198,5 +198,5 @@ def test_assessment_stops_after_five_questions(client):
     result = sixth_response.get_json()
 
     assert result['done'] is True
-    assert result['question_count'] == 5
-    assert result['question_limit'] == 5
+    assert result['question_count'] == 10
+    assert result['question_limit'] == 10

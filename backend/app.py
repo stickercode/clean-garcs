@@ -269,6 +269,7 @@ with app.app_context():
         for column in inspect(db.engine).get_columns("reading_progress")
     }
     progress_column_definitions = {
+        "book_id": "INTEGER",
         "chapter_id": "INTEGER",
         "progress_percent": "FLOAT DEFAULT 0",
         "reading_position": "INTEGER DEFAULT 0",
@@ -460,7 +461,7 @@ def session_start():
     return jsonify({
         "student_id": int(student_id),
         "session_id": assessment.id,
-        "question_limit": 5,
+        "question_limit": 10,
         "ready": True
     })
 
