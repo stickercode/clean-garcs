@@ -233,6 +233,7 @@
           <span class="material-symbols-outlined text-lg" data-icon="arrow_forward">arrow_forward</span>
         </button>
       </section>
+      <p id="progress-save-status" class="mt-3 min-h-5 text-center text-xs font-medium text-on-surface-variant" role="status" aria-live="polite"></p>
 
     </main>
 
@@ -291,9 +292,7 @@
          1. STATE & CONFIGURATION
          ========================================================================== */
       const API_CONFIG = {
-        // Easily configurable endpoint pattern:
         getBook: (bookId) => `/api/library/books/${bookId}`,
-        getChapters: (bookId) => `/api/library/books/${bookId}/chapters`,
         saveProgress: (bookId) => `/api/library/books/${bookId}/progress`
       };
 
@@ -356,6 +355,7 @@
         btnNextText: document.getElementById("btn-next-text"),
         bottomChapterIndicator: document.getElementById("bottom-chapter-indicator"),
         bottomChapterProgress: document.getElementById("bottom-chapter-progress"),
+        progressSaveStatus: document.getElementById("progress-save-status"),
         
         // Drawer
         chapterDrawer: document.getElementById("chapter-drawer"),
@@ -396,45 +396,53 @@
         dom.chapterDrawerBackdrop.addEventListener("click", closeDrawer);
 
         // Chapter next / prev navigation
-        dom.btnPrevChapter.addEventListener("click", () => {
+        dom.btnPrevChapter.addEventListener("click", async () => {
           if (state.currentChapterIndex > 0) {
-            goToChapter(state.currentChapterIndex - 1);
+            await goToChapter(state.currentChapterIndex - 1);
           }
         });
 
-        dom.btnNextChapter.addEventListener("click", () => {
+        dom.btnNextChapter.addEventListener("click", async () => {
           const isLastChapter = state.currentChapterIndex >= state.chapters.length - 1;
+          const currentChapter = state.chapters[state.currentChapterIndex];
+          state.completedChapters.add(currentChapter.chapter_number);
           if (isLastChapter) {
-            // Mark last chapter completed and trigger completion modal
-            markChapterComplete(state.chapters[state.currentChapterIndex].chapter_number);
-            showCompletionModal();
+            await saveReadingProgress(currentChapter.chapter_number);
+            if (state.completedChapters.has(currentChapter.chapter_number)) {
+              showCompletionModal();
+            }
           } else {
-            // Mark current completed and advance
-            markChapterComplete(state.chapters[state.currentChapterIndex].chapter_number);
-            goToChapter(state.currentChapterIndex + 1);
+            await saveReadingProgress(currentChapter.chapter_number);
+            await goToChapter(state.currentChapterIndex + 1);
           }
         });
 
         // Read Again
         if (dom.btnReadAgain) {
-          dom.btnReadAgain.addEventListener("click", () => {
+          dom.btnReadAgain.addEventListener("click", async () => {
             hideCompletionModal();
-            goToChapter(0);
+            await goToChapter(0);
           });
         }
 
         // Keyboard shortcuts: Left/Right arrows for chapter paging
-        window.addEventListener("keydown", (e) => {
+        window.addEventListener("keydown", async (e) => {
           if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
           if (e.key === "ArrowLeft" && state.currentChapterIndex > 0) {
-            goToChapter(state.currentChapterIndex - 1);
+            await goToChapter(state.currentChapterIndex - 1);
           } else if (e.key === "ArrowRight") {
             if (state.currentChapterIndex < state.chapters.length - 1) {
-              goToChapter(state.currentChapterIndex + 1);
+              await goToChapter(state.currentChapterIndex + 1);
             }
           } else if (e.key === "Escape") {
             closeDrawer();
             hideCompletionModal();
+          }
+        });
+
+        window.addEventListener("pagehide", () => {
+          if (state.chapters.length && state.studentId) {
+            saveReadingProgress(state.chapters[state.currentChapterIndex].chapter_number);
           }
         });
       }
@@ -443,97 +451,22 @@
         showLoading();
 
         try {
-          // 1. Fetch book data (which may include chapters or we fetch chapters separately)
           const bookUrl = API_CONFIG.getBook(state.bookId);
           const response = await fetch(bookUrl);
 
           if (!response.ok) {
-            // Fallback for demo / preview environment if backend endpoint is unavailable
-            console.warn(`Book endpoint ${bookUrl} returned status ${response.status}. Trying chapters endpoint or mock recovery.`);
-            await attemptSecondaryOrMockFetch();
-            return;
+            throw new Error(`Unable to load book (${response.status})`);
           }
 
           const data = await response.json();
-          handleLoadedData(data);
+          await handleLoadedData(data);
         } catch (error) {
           console.error("Error fetching from API:", error);
-          await attemptSecondaryOrMockFetch();
+          showError(error.message || "Unable to load this book. Please return to the library and try again.");
         }
       }
 
-      async function attemptSecondaryOrMockFetch() {
-        // Try dedicated chapters endpoint if separate
-        try {
-          const chaptersUrl = API_CONFIG.getChapters(state.bookId);
-          const chResponse = await fetch(chaptersUrl);
-          if (chResponse.ok) {
-            const chData = await chResponse.json();
-            handleLoadedData({
-              id: state.bookId,
-              title: "Library Book #" + state.bookId,
-              author: "Author",
-              chapters: Array.isArray(chData) ? chData : (chData.chapters || [])
-            });
-            return;
-          }
-        } catch (e) {
-          console.warn("Secondary chapter endpoint also failed:", e);
-        }
-
-        // If backend server is not running (e.g. static UI preview in design canvas),
-        // we provide realistic dynamic data matching the database schema so the UI is fully functional
-        // rather than stuck on a broken screen.
-        loadFallbackData();
-      }
-
-      function loadFallbackData() {
-        // Graceful fallback matching database structure
-        const sampleBook = {
-          id: state.bookId,
-          title: "The Architecture of Quiet Wonder",
-          author: "Elena Vance",
-          description: "An exploration into tranquil mental spaces and brilliant student thinking.",
-          category: "Cognitive Science",
-          grade_band: "Middle School (6-8)",
-          cover_image: null,
-          is_featured: true,
-          chapters: [
-            {
-              id: 101,
-              book_id: state.bookId,
-              chapter_number: 1,
-              title: "The Sound of Still Waters",
-              content: "The world outside moves with relentless speed, but learning requires an anchor. When we step into a quiet space, our senses recalibrate. Notice how the breath deepens and thoughts stop scattering like autumn leaves caught in a whirlwind.\n\nIn this opening chapter, we begin to observe how focus is not an intense strain of the will, but rather the removal of friction. Silence is not empty; it is full of answers waiting for you to listen."
-            },
-            {
-              id: 102,
-              book_id: state.bookId,
-              chapter_number: 2,
-              title: "Patterns in the Leaves",
-              content: "Every great discovery begins with a quiet observation. When students are given the freedom to inspect details without distraction, surprising patterns emerge.\n\nTake the structure of a single leaf or the rhythm of a well-crafted sentence. In both cases, interconnected systems support something vibrant and resilient."
-            },
-            {
-              id: 103,
-              book_id: state.bookId,
-              chapter_number: 3,
-              title: "The Architecture of Sanctuary",
-              content: "Building an inner sanctuary is a lifelong endeavor. It is a mental fortress built from curiosity, gentle discipline, and the books that spark your curiosity.\n\nAs you read these pages, reflect upon your own reading habits. What environments bring out your most perceptive thoughts?"
-            },
-            {
-              id: 104,
-              book_id: state.bookId,
-              chapter_number: 4,
-              title: "Horizons of the Curious Mind",
-              content: "When you reach this threshold of understanding, a new clarity emerges. The books we choose to read become companions that accompany us across every challenge.\n\nCarry this sanctuary with you wherever you venture next."
-            }
-          ]
-        };
-
-        handleLoadedData(sampleBook);
-      }
-
-      function handleLoadedData(bookData) {
+      async function handleLoadedData(bookData) {
         if (!bookData) {
           showError("Unable to load this book. Please return to the library and try again.");
           return;
@@ -547,77 +480,98 @@
           return;
         }
 
-        // Initialize progress from stored ReadingProgress or defaults
-        loadReadingProgress();
+        await loadReadingProgress();
 
-        // Render drawer list and first view
         renderChapterDrawerList();
-        goToChapter(state.currentChapterIndex, false);
+        await goToChapter(state.currentChapterIndex, false, false);
         showReadingView();
       }
 
       /* ==========================================================================
          4. PROGRESS TRACKING & PERSISTENCE
          ========================================================================== */
-      function loadReadingProgress() {
-        // Check if student has saved progress in local storage key or API
-        const storageKey = `garcs_reading_progress_${state.studentId || "guest"}_${state.bookId}`;
-        try {
-          const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
-          if (saved) {
-            state.readingProgress = saved;
-            if (saved.completed_chapters && Array.isArray(saved.completed_chapters)) {
-              state.completedChapters = new Set(saved.completed_chapters);
-            }
-            if (typeof saved.current_chapter === "number") {
-              const foundIdx = state.chapters.findIndex(c => c.chapter_number === saved.current_chapter);
-              if (foundIdx >= 0) {
-                state.currentChapterIndex = foundIdx;
-              }
-            }
-          }
-        } catch (e) {
-          console.warn("Could not read local progress cache", e);
+      async function loadReadingProgress() {
+        if (!state.studentId) {
+          throw new Error("No student session found. Please return to the login page.");
         }
+
+        const response = await fetch(
+          `${API_CONFIG.saveProgress(state.bookId)}?student_id=${encodeURIComponent(state.studentId)}`
+        );
+        if (!response.ok) {
+          throw new Error(`Unable to load reading progress (${response.status})`);
+        }
+
+        const payload = await response.json();
+        const saved = payload.progress;
+        if (!saved) return;
+
+        state.readingProgress = saved;
+        const completedCount = Number(saved.completed_chapters || 0);
+        state.completedChapters = new Set(
+          state.chapters
+            .filter(chapter => chapter.chapter_number <= completedCount)
+            .map(chapter => chapter.chapter_number)
+        );
+
+        const foundIdx = state.chapters.findIndex(
+          chapter => chapter.id === saved.chapter_id || chapter.chapter_number === saved.current_chapter
+        );
+        if (foundIdx >= 0) state.currentChapterIndex = foundIdx;
       }
 
       async function saveReadingProgress(currentChapterNum) {
-        const completedList = Array.from(state.completedChapters);
-        const isComplete = state.chapters.length > 0 && completedList.length >= state.chapters.length;
+        if (!state.studentId || !state.chapters.length) return false;
+
+        const chapter = state.chapters.find(item => item.chapter_number === currentChapterNum);
+        if (!chapter) return false;
+        const completedCount = Math.min(state.completedChapters.size, state.chapters.length);
+        const isComplete = completedCount >= state.chapters.length;
 
         const progressPayload = {
           student_id: state.studentId,
           book_id: state.bookId,
+          chapter_id: chapter.id,
           current_chapter: currentChapterNum,
-          completed_chapters: completedList,
+          completed_chapters: completedCount,
+          progress_percent: Math.round((completedCount / state.chapters.length) * 100),
+          reading_position: 0,
           completed: isComplete
         };
 
-        // 1. Save in localStorage for immediate resilience
-        const storageKey = `garcs_reading_progress_${state.studentId || "guest"}_${state.bookId}`;
+        setProgressSaveStatus("Saving progress...", "text-on-surface-variant");
         try {
-          localStorage.setItem(storageKey, JSON.stringify(progressPayload));
-        } catch (e) {
-          console.warn("Storage save failed", e);
-        }
-
-        // 2. Persist to Flask backend API
-        try {
-          const saveUrl = API_CONFIG.saveProgress(state.bookId);
-          await fetch(saveUrl, {
+          const response = await fetch(API_CONFIG.saveProgress(state.bookId), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(progressPayload)
+            body: JSON.stringify(progressPayload),
+            keepalive: true
           });
+          if (!response.ok) throw new Error(`Save failed (${response.status})`);
+          setProgressSaveStatus("Progress saved", "text-primary");
+          return true;
         } catch (err) {
-          // Non-blocking: background sync
-          console.info("Progress saved locally (backend sync pending)");
+          console.error("Unable to save reading progress:", err);
+          setProgressSaveStatus("Progress could not be saved", "text-error");
+          return false;
         }
       }
 
-      function markChapterComplete(chapterNum) {
-        state.completedChapters.add(chapterNum);
-        saveReadingProgress(chapterNum);
+      function setProgressSaveStatus(message, colorClass) {
+        if (!dom.progressSaveStatus) return;
+        dom.progressSaveStatus.textContent = message;
+        dom.progressSaveStatus.className = `mt-3 min-h-5 text-center text-xs font-medium ${colorClass}`;
+      }
+
+      async function goToChapter(index, autoScroll = true, persist = true) {
+        if (index < 0 || index >= state.chapters.length) return;
+
+        state.currentChapterIndex = index;
+        const chapter = state.chapters[index];
+
+        if (persist) await saveReadingProgress(chapter.chapter_number);
+
+        renderCurrentChapter(autoScroll);
         updateProgressIndicators();
         renderChapterDrawerList();
       }
@@ -625,11 +579,9 @@
       /* ==========================================================================
          5. VIEW UPDATING & RENDERING
          ========================================================================== */
-      function goToChapter(index, autoScroll = true) {
-        if (index < 0 || index >= state.chapters.length) return;
-
-        state.currentChapterIndex = index;
-        const chapter = state.chapters[index];
+      function renderCurrentChapter(autoScroll) {
+        const index = state.currentChapterIndex;
+        const chapter = state.chapters[state.currentChapterIndex];
 
         // Update header metadata
         if (dom.headerBookTitle) {
@@ -679,13 +631,6 @@
           dom.btnNextChapter.querySelector("[data-icon]").setAttribute("data-icon", "arrow_forward");
           dom.btnNextChapter.querySelector("[data-icon]").textContent = "arrow_forward";
         }
-
-        // Update indicators
-        updateProgressIndicators();
-        renderChapterDrawerList();
-
-        // Save active chapter pointer
-        saveReadingProgress(chapter.chapter_number);
 
         // Scroll to top of reading area smoothly
         if (autoScroll) {
@@ -803,8 +748,8 @@
             ${isCurrent ? '<span class="text-[10px] uppercase tracking-wider font-bold bg-white/20 px-2 py-0.5 rounded-full">Active</span>' : ''}
           `;
 
-          itemBtn.addEventListener("click", () => {
-            goToChapter(idx);
+          itemBtn.addEventListener("click", async () => {
+            await goToChapter(idx);
             closeDrawer();
           });
 

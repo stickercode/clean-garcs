@@ -63,7 +63,7 @@ DESIGN DECISIONS WORTH KNOWING ABOUT
 import csv
 import io
 # from operator import or_
-from sqlalchemy import or_
+from sqlalchemy import inspect, or_, text
 
 import random
 from datetime import datetime
@@ -183,15 +183,29 @@ class ReadingProgress(db.Model):
         nullable=False
     )
 
+    passage_id = db.Column(
+        db.Integer,
+        db.ForeignKey("passage.id"),
+        nullable=True
+    )
+
     book_id = db.Column(
         db.Integer,
         db.ForeignKey("library_book.id"),
         nullable=False
     )
 
+    chapter_id = db.Column(
+        db.Integer,
+        db.ForeignKey("library_chapter.id"),
+        nullable=True
+    )
     current_chapter = db.Column(db.Integer, default=1)
     completed_chapters = db.Column(db.Integer, default=0)
+    progress_percent = db.Column(db.Float, default=0)
+    reading_position = db.Column(db.Integer, default=0)
     completed = db.Column(db.Boolean, default=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Question(db.Model):
@@ -249,6 +263,25 @@ class AssessmentSession(db.Model):
 #     db.create_all()
 with app.app_context():
     db.create_all()
+
+    progress_columns = {
+        column["name"]
+        for column in inspect(db.engine).get_columns("reading_progress")
+    }
+    progress_column_definitions = {
+        "chapter_id": "INTEGER",
+        "progress_percent": "FLOAT DEFAULT 0",
+        "reading_position": "INTEGER DEFAULT 0",
+        "updated_at": "DATETIME",
+    }
+    with db.engine.begin() as connection:
+        for column_name, column_definition in progress_column_definitions.items():
+            if column_name not in progress_columns:
+                connection.execute(text(
+                    f"ALTER TABLE reading_progress ADD COLUMN "
+                    f"{column_name} {column_definition}"
+                ))
+
     print("DATABASE URI:", app.config["SQLALCHEMY_DATABASE_URI"])
     print("DATABASE ENGINE URL:", db.engine.url)
     print("DATABASE FILE:", db.engine.url.database)
@@ -461,6 +494,131 @@ def _fetch_candidates(skill_tag, difficulty, passage_id=None):
         query = query.filter_by(passage_id=passage_id)
 
     return query.all()
+
+
+def _serialize_library_book(book):
+    chapters = sorted(book.chapters, key=lambda chapter: chapter.chapter_number)
+    return {
+        "id": book.id,
+        "title": book.title,
+        "author": book.author,
+        "description": book.description,
+        "category": book.category,
+        "grade_band": book.grade_band,
+        "cover_image": book.cover_image,
+        "is_featured": book.is_featured,
+        "chapters": [
+            {
+                "id": chapter.id,
+                "book_id": chapter.book_id,
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "content": chapter.content,
+            }
+            for chapter in chapters
+        ],
+    }
+
+
+def _serialize_reading_progress(progress):
+    if not progress:
+        return None
+
+    return {
+        "id": progress.id,
+        "student_id": progress.student_id,
+        "book_id": progress.book_id,
+        "chapter_id": progress.chapter_id,
+        "current_chapter": progress.current_chapter,
+        "completed_chapters": progress.completed_chapters or 0,
+        "progress_percent": progress.progress_percent or 0,
+        "reading_position": progress.reading_position or 0,
+        "completed": bool(progress.completed),
+        "updated_at": progress.updated_at.isoformat() if progress.updated_at else None,
+    }
+
+
+@app.route('/api/library/books/<int:book_id>')
+def get_library_book(book_id):
+    book = LibraryBook.query.get(book_id)
+    if not book:
+        return jsonify({"error": "book not found"}), 404
+
+    return jsonify(_serialize_library_book(book))
+
+
+@app.route('/api/library/books/<int:book_id>/progress', methods=['GET', 'POST', 'PUT'])
+def library_book_progress(book_id):
+    book = LibraryBook.query.get(book_id)
+    if not book:
+        return jsonify({"error": "book not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    student_id = data.get("student_id") if request.method != "GET" else request.args.get("student_id", type=int)
+    try:
+        student_id = int(student_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "valid student_id required"}), 400
+
+    if not Student.query.get(student_id):
+        return jsonify({"error": "student not found"}), 404
+
+    progress = ReadingProgress.query.filter_by(
+        student_id=student_id,
+        book_id=book_id,
+    ).first()
+
+    if request.method == 'GET':
+        return jsonify({"progress": _serialize_reading_progress(progress)})
+
+    chapter_id = data.get("chapter_id")
+    current_chapter = data.get("current_chapter")
+    try:
+        chapter_id = int(chapter_id)
+        current_chapter = int(current_chapter)
+    except (TypeError, ValueError):
+        return jsonify({"error": "chapter_id and current_chapter are required"}), 400
+
+    chapter = LibraryChapter.query.filter_by(id=chapter_id, book_id=book_id).first()
+    if not chapter or chapter.chapter_number != current_chapter:
+        return jsonify({"error": "chapter does not belong to book"}), 400
+
+    try:
+        progress_percent = float(data.get("progress_percent", 0))
+        reading_position = int(data.get("reading_position", 0))
+        completed_chapters = int(data.get("completed_chapters", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "progress values must be numeric"}), 400
+
+    if not 0 <= progress_percent <= 100 or reading_position < 0 or completed_chapters < 0:
+        return jsonify({"error": "invalid progress values"}), 400
+
+    completed_chapters = min(completed_chapters, len(book.chapters))
+    if not progress:
+        legacy_passage = Passage.query.order_by(Passage.id).first()
+        progress = ReadingProgress(
+            student_id=student_id,
+            book_id=book_id,
+            passage_id=legacy_passage.id if legacy_passage else None,
+        )
+        db.session.add(progress)
+
+    progress.chapter_id = chapter.id
+    progress.current_chapter = chapter.chapter_number
+    progress.completed_chapters = completed_chapters
+    progress.progress_percent = progress_percent
+    progress.reading_position = reading_position
+    progress.completed = bool(data.get("completed", False))
+    progress.updated_at = datetime.utcnow()
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"error": "unable to save reading progress"}), 500
+
+    return jsonify({"progress": _serialize_reading_progress(progress)}), 200
+
 
 @app.route('/api/library/books')
 def get_library_books():
