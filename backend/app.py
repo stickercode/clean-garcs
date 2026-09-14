@@ -743,6 +743,12 @@ def assessment_passages():
 # ONE PASSAGE AT A TIME
 # =====================================
 @app.route('/api/question/next')
+# =====================================
+# ADAPTIVE QUESTION SELECTION
+# ONE PASSAGE AT A TIME
+# WITH UNSEEN-PASSAGE PRIORITY
+# =====================================
+@app.route('/api/question/next')
 def question_next():
     student_id = request.args.get("student_id", type=int)
     session_id = request.args.get("session_id", type=int)
@@ -777,6 +783,7 @@ def question_next():
     # HARD LIMIT: 10 QUESTIONS PER ASSESSMENT
     # -------------------------------------------------
     if assessment.question_count >= 10:
+
         if not assessment.completed_at:
             assessment.completed_at = datetime.utcnow()
             db.session.commit()
@@ -800,6 +807,9 @@ def question_next():
 
     # -------------------------------------------------
     # QUESTIONS ALREADY ANSWERED IN THIS ASSESSMENT
+    #
+    # These are excluded so the same question cannot be
+    # served twice during the current assessment.
     # -------------------------------------------------
     answered_ids = [
         r.question_id
@@ -812,14 +822,70 @@ def question_next():
     answered_set = set(answered_ids)
 
     # -------------------------------------------------
-    # DETERMINE CURRENT PASSAGE
+    # FIND PASSAGES THE STUDENT HAS ALREADY ENCOUNTERED
     #
-    # We do not need a new database column.
+    # A passage is considered "encountered" if the student
+    # has answered at least one question belonging to it
+    # in ANY previous assessment.
+    #
+    # This is intentionally NOT limited to the current
+    # session.
+    # -------------------------------------------------
+    seen_passage_rows = (
+        db.session.query(Question.passage_id)
+        .join(
+            Response,
+            Response.question_id == Question.id
+        )
+        .filter(
+            Response.student_id == student_id,
+            Question.passage_id.isnot(None)
+        )
+        .distinct()
+        .all()
+    )
+
+    seen_passage_ids = {
+        row[0]
+        for row in seen_passage_rows
+        if row[0] is not None
+    }
+
+    # -------------------------------------------------
+    # GET ALL PASSAGES THAT HAVE QUESTIONS
+    # -------------------------------------------------
+    all_passage_ids = {
+        row[0]
+        for row in (
+            db.session.query(Question.passage_id)
+            .filter(Question.passage_id.isnot(None))
+            .distinct()
+            .all()
+        )
+        if row[0] is not None
+    }
+
+    # -------------------------------------------------
+    # DETERMINE WHETHER THERE ARE STILL UNSEEN PASSAGES
+    #
+    # If there are unseen passages, they MUST be preferred.
+    #
+    # If every passage has already been encountered, the
+    # passage pool resets and previously seen passages may
+    # be used again.
+    # -------------------------------------------------
+    unseen_passage_ids = all_passage_ids - seen_passage_ids
+
+    passage_pool_has_unseen = bool(unseen_passage_ids)
+
+    # -------------------------------------------------
+    # CURRENT PASSAGE
+    #
     # The current passage is determined from the most
     # recently answered question in this assessment.
     #
-    # If there are no responses yet, this is the first
-    # question and therefore there is no current passage.
+    # This allows the frontend to keep displaying the same
+    # passage while its unanswered questions remain.
     # -------------------------------------------------
     latest_response = (
         Response.query
@@ -842,22 +908,98 @@ def question_next():
             current_passage_id = latest_question.passage_id
 
     # -------------------------------------------------
-    # FUNCTION USED BY THE ADAPTIVE ENGINE
-    #
-    # If current_passage_id exists, adaptive selection
-    # is restricted to that passage.
+    # HELPER: FETCH QUESTIONS FOR A SPECIFIC PASSAGE
     # -------------------------------------------------
+    def fetch_current_passage(skill_tag, difficulty):
+        return _fetch_candidates(
+            skill_tag,
+            difficulty,
+            current_passage_id
+        )
+
+    # -------------------------------------------------
+    # HELPER: FETCH ONLY QUESTIONS FROM UNSEEN PASSAGES
+    #
+    # This is the important part that prevents the system
+    # from repeatedly selecting the same few passages.
+    # -------------------------------------------------
+    def fetch_unseen_candidates(skill_tag, difficulty):
+        candidates = _fetch_candidates(
+            skill_tag,
+            difficulty
+        )
+
+        return [
+            q for q in candidates
+            if (
+                q.id not in answered_set
+                and q.passage_id in unseen_passage_ids
+            )
+        ]
+
+    # -------------------------------------------------
+    # HELPER: FETCH ANY UNANSWERED QUESTION FROM AN
+    # UNSEEN PASSAGE
+    # -------------------------------------------------
+    def fetch_any_unseen_question():
+        if not unseen_passage_ids:
+            return None
+
+        candidates = (
+            Question.query
+            .filter(
+                Question.passage_id.in_(unseen_passage_ids),
+                ~Question.id.in_(answered_ids or [-1])
+            )
+            .all()
+        )
+
+        if candidates:
+            return random.choice(candidates)
+
+        return None
+
+    # -------------------------------------------------
+    # HELPER: FETCH ANY UNANSWERED QUESTION
+    #
+    # Used only after the unseen passage pool has been
+    # exhausted.
+    # -------------------------------------------------
+    def fetch_any_unanswered_question():
+        candidates = (
+            Question.query
+            .filter(
+                ~Question.id.in_(answered_ids or [-1])
+            )
+            .all()
+        )
+
+        if candidates:
+            return random.choice(candidates)
+
+        return None
+
+    # -------------------------------------------------
+    # SELECT QUESTION
+    # -------------------------------------------------
+    question = None
+    skill_tag = None
+    difficulty = None
+    new_passage = False
+
+    # =================================================
+    # CASE 1:
+    # THERE IS A CURRENT PASSAGE
+    # =================================================
     if current_passage_id is not None:
 
-        def fetch_current_passage(skill_tag, difficulty):
-            return _fetch_candidates(
-                skill_tag,
-                difficulty,
-                current_passage_id
-            )
-
         # -------------------------------------------------
-        # TRY ADAPTIVE SELECTION WITHIN CURRENT PASSAGE
+        # FIRST: CONTINUE CURRENT PASSAGE
+        #
+        # IMPORTANT:
+        # Once a passage has started, the student stays
+        # with that passage until there are no unanswered
+        # questions left in it.
         # -------------------------------------------------
         question, skill_tag, difficulty = pick_next_question(
             states,
@@ -867,7 +1009,7 @@ def question_next():
 
         # -------------------------------------------------
         # FALLBACK 1:
-        # RELAX DIFFICULTY BUT STAY IN SAME PASSAGE
+        # RELAX DIFFICULTY BUT STAY IN CURRENT PASSAGE
         # -------------------------------------------------
         if question is None:
 
@@ -901,8 +1043,7 @@ def question_next():
         # FALLBACK 2:
         # ANY UNANSWERED QUESTION FROM CURRENT PASSAGE
         #
-        # IMPORTANT:
-        # We do NOT leave the passage here.
+        # We still do NOT leave the passage.
         # -------------------------------------------------
         if question is None:
 
@@ -923,8 +1064,209 @@ def question_next():
         # -------------------------------------------------
         # CURRENT PASSAGE IS EXHAUSTED
         #
-        # Only now are we allowed to select another
-        # passage.
+        # Only now may the system select another passage.
+        # -------------------------------------------------
+        if question is None:
+
+            new_passage = True
+
+            # =============================================
+            # PRIORITY 1:
+            # SELECT FROM AN UNSEEN PASSAGE
+            # =============================================
+            if passage_pool_has_unseen:
+
+                # -----------------------------------------
+                # Adaptive selection:
+                # weakest skill + target difficulty,
+                # but restricted to unseen passages.
+                # -----------------------------------------
+                question, skill_tag, difficulty = pick_next_question(
+                    states,
+                    fetch_unseen_candidates,
+                    answered_ids
+                )
+
+                # -----------------------------------------
+                # FALLBACK 3:
+                # RELAX DIFFICULTY WHILE STAYING WITHIN
+                # UNSEEN PASSAGES
+                # -----------------------------------------
+                if question is None:
+
+                    tried = {difficulty}
+                    relaxed = relax_difficulty(difficulty)
+
+                    while (
+                        question is None
+                        and relaxed
+                        and relaxed not in tried
+                    ):
+                        tried.add(relaxed)
+
+                        candidates = [
+                            q
+                            for q in _fetch_candidates(
+                                skill_tag,
+                                relaxed
+                            )
+                            if (
+                                q.id not in answered_set
+                                and q.passage_id in unseen_passage_ids
+                            )
+                        ]
+
+                        if candidates:
+                            question = random.choice(candidates)
+                            difficulty = relaxed
+                        else:
+                            relaxed = relax_difficulty(relaxed)
+
+                # -----------------------------------------
+                # FALLBACK 4:
+                # ANY UNANSWERED QUESTION FROM AN
+                # UNSEEN PASSAGE
+                # -----------------------------------------
+                if question is None:
+
+                    question = fetch_any_unseen_question()
+
+                    if question:
+                        skill_tag = question.skill_tag
+                        difficulty = question.difficulty
+
+            # =============================================
+            # PRIORITY 2:
+            # ALL PASSAGES HAVE BEEN SEEN
+            #
+            # Reset the passage pool.
+            # Previously encountered passages can now
+            # appear again, but questions already answered
+            # in THIS assessment remain excluded.
+            # =============================================
+            if question is None:
+
+                question, skill_tag, difficulty = pick_next_question(
+                    states,
+                    _fetch_candidates,
+                    answered_ids
+                )
+
+                # -----------------------------------------
+                # FALLBACK 5:
+                # GLOBAL DIFFICULTY RELAXATION
+                # -----------------------------------------
+                if question is None:
+
+                    tried = {difficulty}
+                    relaxed = relax_difficulty(difficulty)
+
+                    while (
+                        question is None
+                        and relaxed
+                        and relaxed not in tried
+                    ):
+                        tried.add(relaxed)
+
+                        candidates = [
+                            q
+                            for q in _fetch_candidates(
+                                skill_tag,
+                                relaxed
+                            )
+                            if q.id not in answered_set
+                        ]
+
+                        if candidates:
+                            question = random.choice(candidates)
+                            difficulty = relaxed
+                        else:
+                            relaxed = relax_difficulty(relaxed)
+
+                # -----------------------------------------
+                # FALLBACK 6:
+                # ANY UNANSWERED QUESTION
+                # -----------------------------------------
+                if question is None:
+
+                    question = fetch_any_unanswered_question()
+
+                    if question:
+                        skill_tag = question.skill_tag
+                        difficulty = question.difficulty
+
+    # =================================================
+    # CASE 2:
+    # FIRST QUESTION OF THE ASSESSMENT
+    # =================================================
+    else:
+
+        new_passage = True
+
+        # -------------------------------------------------
+        # PRIORITY 1:
+        # IF UNSEEN PASSAGES EXIST, THE FIRST QUESTION
+        # MUST COME FROM AN UNSEEN PASSAGE.
+        # -------------------------------------------------
+        if passage_pool_has_unseen:
+
+            question, skill_tag, difficulty = pick_next_question(
+                states,
+                fetch_unseen_candidates,
+                answered_ids
+            )
+
+            # -------------------------------------------------
+            # FALLBACK 1:
+            # RELAX DIFFICULTY WITHIN UNSEEN PASSAGES
+            # -------------------------------------------------
+            if question is None:
+
+                tried = {difficulty}
+                relaxed = relax_difficulty(difficulty)
+
+                while (
+                    question is None
+                    and relaxed
+                    and relaxed not in tried
+                ):
+                    tried.add(relaxed)
+
+                    candidates = [
+                        q
+                        for q in _fetch_candidates(
+                            skill_tag,
+                            relaxed
+                        )
+                        if (
+                            q.id not in answered_set
+                            and q.passage_id in unseen_passage_ids
+                        )
+                    ]
+
+                    if candidates:
+                        question = random.choice(candidates)
+                        difficulty = relaxed
+                    else:
+                        relaxed = relax_difficulty(relaxed)
+
+            # -------------------------------------------------
+            # FALLBACK 2:
+            # ANY QUESTION FROM AN UNSEEN PASSAGE
+            # -------------------------------------------------
+            if question is None:
+
+                question = fetch_any_unseen_question()
+
+                if question:
+                    skill_tag = question.skill_tag
+                    difficulty = question.difficulty
+
+        # -------------------------------------------------
+        # PRIORITY 2:
+        # ALL PASSAGES HAVE ALREADY BEEN ENCOUNTERED
+        #
+        # Start using the passage pool again.
         # -------------------------------------------------
         if question is None:
 
@@ -934,11 +1276,9 @@ def question_next():
                 answered_ids
             )
 
-            new_passage = True
-
             # -------------------------------------------------
             # FALLBACK 3:
-            # GLOBAL DIFFICULTY RELAXATION
+            # RELAX DIFFICULTY
             # -------------------------------------------------
             if question is None:
 
@@ -969,98 +1309,21 @@ def question_next():
 
             # -------------------------------------------------
             # FALLBACK 4:
-            # ANY UNANSWERED QUESTION FROM ANY PASSAGE
+            # ANY UNANSWERED QUESTION
             # -------------------------------------------------
             if question is None:
 
-                remaining = (
-                    Question.query
-                    .filter(
-                        ~Question.id.in_(answered_ids or [-1])
-                    )
-                    .all()
-                )
+                question = fetch_any_unanswered_question()
 
-                if remaining:
-                    question = random.choice(remaining)
+                if question:
                     skill_tag = question.skill_tag
                     difficulty = question.difficulty
 
-        else:
-            # We found another question in the same passage.
-            new_passage = False
-
-    else:
-        # -------------------------------------------------
-        # FIRST QUESTION OF THE ASSESSMENT
-        #
-        # No passage has been established yet.
-        # The normal adaptive engine chooses the first
-        # question, and that question establishes the
-        # first passage.
-        # -------------------------------------------------
-        question, skill_tag, difficulty = pick_next_question(
-            states,
-            _fetch_candidates,
-            answered_ids
-        )
-
-        new_passage = True
-
-        # -------------------------------------------------
-        # FALLBACK 1:
-        # RELAX DIFFICULTY
-        # -------------------------------------------------
-        if question is None:
-
-            tried = {difficulty}
-            relaxed = relax_difficulty(difficulty)
-
-            while (
-                question is None
-                and relaxed
-                and relaxed not in tried
-            ):
-                tried.add(relaxed)
-
-                candidates = [
-                    q
-                    for q in _fetch_candidates(
-                        skill_tag,
-                        relaxed
-                    )
-                    if q.id not in answered_set
-                ]
-
-                if candidates:
-                    question = random.choice(candidates)
-                    difficulty = relaxed
-                else:
-                    relaxed = relax_difficulty(relaxed)
-
-        # -------------------------------------------------
-        # FALLBACK 2:
-        # ANY UNANSWERED QUESTION
-        # -------------------------------------------------
-        if question is None:
-
-            remaining = (
-                Question.query
-                .filter(
-                    ~Question.id.in_(answered_ids or [-1])
-                )
-                .all()
-            )
-
-            if remaining:
-                question = random.choice(remaining)
-                skill_tag = question.skill_tag
-                difficulty = question.difficulty
-
-    # -------------------------------------------------
+    # =================================================
     # NO QUESTION AVAILABLE
-    # -------------------------------------------------
+    # =================================================
     if question is None:
+
         return jsonify({
             "done": True,
             "message": "No unanswered questions remain in the bank.",
@@ -1112,9 +1375,6 @@ def question_next():
             "body": passage.body or "",
         }
     })
-
-   
-
 
 # =====================================
 # ANSWER SUBMISSION -- logs Response, updates mastery, awards points
