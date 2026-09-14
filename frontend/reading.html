@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>GARCS - Reader</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="static/theme.css">
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            primary: "var(--primary, #00675b)",
+            "primary-dim": "var(--primary-dim, #005a4f)",
+            "primary-container": "var(--primary-container, #99ecdb)",
+            secondary: "var(--secondary, #2a5e91)",
+            "secondary-container": "var(--secondary-container, #b3d4ff)",
+            tertiary: "var(--tertiary, #526200)",
+            "tertiary-container": "var(--tertiary-container, #e9fe90)",
+            surface: "var(--surface, #d4fffb)",
+            "surface-container": "var(--surface-container, #adf5f1)",
+            "surface-container-low": "var(--surface-container-low, #bafdf9)",
+            "surface-container-high": "var(--surface-container-high, #a2f1ec)",
+            "surface-container-highest": "var(--surface-container-highest, #96ece7)",
+            "surface-container-lowest": "var(--surface-container-lowest, #ffffff)",
+            "on-surface": "var(--on-surface, #003533)",
+            "on-surface-variant": "var(--on-surface-variant, #296462)",
+            outline: "var(--outline, #47807d)",
+            "outline-variant": "var(--outline-variant, #7db8b4)",
+            background: "var(--background, #d4fffb)"
+          },
+          fontFamily: {
+            headline: ["var(--font-headline, 'Lexend')", "sans-serif"],
+            body: ["var(--font-body, 'Plus Jakarta Sans')", "sans-serif"],
+            reader: ["'Merriweather'", "Georgia", "serif"]
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="static/theme.css">
+  
+</head>
+<body class="bg-surface text-on-surface flex flex-col min-h-screen selection:bg-primary-container selection:text-primary">
+
+  <!-- TOP APP BAR -->
+  <header class="sticky top-0 z-30 bg-surface/90 backdrop-blur-md border-b border-outline-variant/30 transition-shadow">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-4">
+      
+      <!-- Back to Library & Brand -->
+      <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+        <a href="library.html" id="btn-back-library" class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-container-low rounded-xl transition-colors shrink-0 group" title="Return to Library">
+          <span class="material-symbols-outlined text-xl transition-transform group-hover:-translate-x-1" data-icon="arrow_back">arrow_back</span>
+          <span class="hidden sm:inline">Library</span>
+        </a>
+        <div class="h-6 w-px bg-outline-variant/30 shrink-0"></div>
+        <div class="flex items-center gap-2 truncate">
+          <div class="w-8 h-8 rounded-lg bg-primary text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-sm">
+            <span class="material-symbols-outlined text-lg" data-icon="menu_book">menu_book</span>
+          </div>
+          <span class="font-headline font-bold text-sm sm:text-base text-primary hidden md:inline shrink-0">GARCS</span>
+          <span class="text-outline-variant hidden md:inline">•</span>
+          <h1 id="header-book-title" class="font-headline font-semibold text-sm sm:text-base text-on-surface truncate">
+            Loading book...
+          </h1>
+        </div>
+      </div>
+
+      <!-- Center / Right Controls: Progress & Chapter Drawer Toggle -->
+      <div class="flex items-center gap-3 sm:gap-5 shrink-0">
+        <!-- Progress Summary Badge -->
+        <div class="hidden sm:flex flex-col items-end">
+          <div class="flex items-center gap-2 text-xs font-semibold text-on-surface-variant">
+            <span id="header-chapter-badge">Chapter 0 of 0</span>
+            <span class="text-outline-variant">•</span>
+            <span id="header-progress-percent" class="text-primary font-bold">0%</span>
+          </div>
+          <!-- Tiny progress track -->
+          <div class="w-28 h-1.5 bg-surface-container-high rounded-full overflow-hidden mt-1">
+            <div id="header-progress-bar" class="h-full bg-primary rounded-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Chapter Selector Toggle Button -->
+        <button id="btn-toggle-chapters" class="inline-flex items-center gap-2 px-3 py-2 bg-surface-container-lowest hover:bg-surface-container-low border border-outline-variant/40 rounded-xl text-xs sm:text-sm font-bold text-primary shadow-sm hover:shadow transition-all" aria-expanded="false" aria-controls="chapter-drawer">
+          <span class="material-symbols-outlined text-lg" data-icon="format_list_bulleted">format_list_bulleted</span>
+          <span class="hidden sm:inline">Chapters</span>
+          <span id="btn-chapter-indicator-pill" class="bg-primary-container text-on-primary-container text-xs px-2 py-0.5 rounded-full font-bold">0/0</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Reading Progress Bar across full width -->
+    <div class="w-full h-1 bg-surface-container-low">
+      <div id="global-progress-bar" class="h-full bg-primary transition-all duration-300" style="width: 0%;"></div>
+    </div>
+  </header>
+
+  <!-- MAIN WRAPPER WITH DRAWER OVERLAY -->
+  <div class="relative flex-1 flex flex-col justify-between max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 md:py-10">
+    
+    <!-- CHAPTER SIDE DRAWER / MODAL -->
+    <div id="chapter-drawer-backdrop" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 hidden opacity-0 transition-opacity duration-300"></div>
+    <aside id="chapter-drawer" class="fixed top-0 right-0 h-full w-full max-w-md bg-surface-container-lowest z-50 shadow-2xl transform translate-x-full transition-transform duration-300 flex flex-col">
+      <!-- Drawer Header -->
+      <div class="p-6 border-b border-surface-container-high flex items-center justify-between">
+        <div>
+          <h2 class="font-headline font-bold text-lg text-on-surface">Table of Contents</h2>
+          <p id="drawer-book-subtitle" class="text-xs text-on-surface-variant mt-0.5 truncate max-w-[280px]">Book chapters</p>
+        </div>
+        <button id="btn-close-drawer" class="w-9 h-9 rounded-full hover:bg-surface-container-low flex items-center justify-center text-outline transition-colors" aria-label="Close chapters menu">
+          <span class="material-symbols-outlined" data-icon="close">close</span>
+        </button>
+      </div>
+
+      <!-- Drawer Chapter List -->
+      <div id="drawer-chapter-list" class="flex-1 overflow-y-auto p-4 space-y-2 custom-scroll">
+        <!-- Dynamically filled with chapters -->
+      </div>
+
+      <!-- Drawer Footer -->
+      <div class="p-4 border-t border-surface-container-high bg-surface-container-low/50 flex items-center justify-between text-xs text-on-surface-variant font-medium">
+        <span id="drawer-completed-count">0 of 0 chapters finished</span>
+        <span class="inline-flex items-center gap-1 text-primary font-semibold">
+          <span class="material-symbols-outlined text-sm" data-icon="check_circle">check_circle</span> Auto-saved
+        </span>
+      </div>
+    </aside>
+
+    <!-- STATE CONTAINERS -->
+
+    <!-- 1. LOADING STATE -->
+    <div id="loading-state" class="flex flex-col items-center justify-center min-h-[50vh] text-center px-4 py-16">
+      <div class="w-16 h-16 rounded-2xl bg-surface-container-lowest shadow-lg flex items-center justify-center mb-6 relative">
+        <span class="material-symbols-outlined text-4xl text-primary animate-pulse" data-icon="auto_stories">auto_stories</span>
+        <div class="absolute inset-0 border-3 border-primary/20 border-t-primary rounded-2xl animate-spin"></div>
+      </div>
+      <h3 class="font-headline font-bold text-xl text-on-surface mb-2">Preparing your sanctuary...</h3>
+      <p class="text-on-surface-variant text-sm max-w-sm">Fetching book and chapters from the library.</p>
+    </div>
+
+    <!-- 2. ERROR STATE -->
+    <div id="error-state" class="hidden flex flex-col items-center justify-center min-h-[50vh] text-center px-4 py-16">
+      <div class="w-16 h-16 rounded-2xl bg-error/10 text-error flex items-center justify-center mb-5 shadow-sm">
+        <span class="material-symbols-outlined text-4xl" data-icon="error_outline">error_outline</span>
+      </div>
+      <h3 class="font-headline font-bold text-2xl text-on-surface mb-2">Unable to load this book</h3>
+      <p id="error-message-text" class="text-on-surface-variant text-sm max-w-md mb-8 leading-relaxed">
+        Unable to load this book. Please return to the library and try again.
+      </p>
+      <div class="flex flex-wrap items-center justify-center gap-3">
+        <a href="library.html" class="px-6 py-3 bg-primary text-white font-headline font-bold text-sm rounded-xl shadow-md hover:bg-primary-dim transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-lg" data-icon="arrow_back">arrow_back</span>
+          Return to Library
+        </a>
+        <button id="btn-retry" class="px-6 py-3 bg-surface-container-lowest border border-outline-variant text-on-surface font-headline font-bold text-sm rounded-xl hover:bg-surface-container-low transition-all">
+          Retry
+        </button>
+      </div>
+    </div>
+
+    <!-- 3. EMPTY STATE (No Chapters Found) -->
+    <div id="empty-state" class="hidden flex flex-col items-center justify-center min-h-[50vh] text-center px-4 py-16">
+      <div class="w-16 h-16 rounded-2xl bg-surface-container-high text-primary flex items-center justify-center mb-5">
+        <span class="material-symbols-outlined text-4xl" data-icon="library_books">library_books</span>
+      </div>
+      <h3 class="font-headline font-bold text-2xl text-on-surface mb-2">No chapters available</h3>
+      <p class="text-on-surface-variant text-sm max-w-md mb-8 leading-relaxed">
+        This book currently does not have any chapters prepared for reading.
+      </p>
+      <a href="library.html" class="px-6 py-3 bg-primary text-white font-headline font-bold text-sm rounded-xl shadow-md hover:bg-primary-dim transition-all inline-flex items-center gap-2">
+        <span class="material-symbols-outlined text-lg" data-icon="arrow_back">arrow_back</span>
+        Return to Library
+      </a>
+    </div>
+
+    <!-- 4. ACTIVE READING AREA -->
+    <main id="reading-content-container" class="hidden flex-1 flex flex-col items-center">
+      
+      <!-- Reading Area Card with comfortable width and typography -->
+      <article class="w-full max-w-3xl bg-surface-container-lowest rounded-3xl p-6 sm:p-10 md:p-14 shadow-[0_20px_40px_rgba(0,53,51,0.06)] border border-outline-variant/20 transition-all">
+        
+        <!-- Book & Chapter Metadata Header -->
+        <div class="mb-8 sm:mb-12 border-b border-surface-container-high pb-8">
+          <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-primary mb-3">
+            <span class="material-symbols-outlined text-base" data-icon="bookmark">bookmark</span>
+            <span id="chapter-label-badge">CHAPTER 1</span>
+          </div>
+          <h2 id="chapter-title" class="font-headline font-bold text-3xl sm:text-4xl text-on-surface leading-tight tracking-tight mb-3">
+            Chapter Title
+          </h2>
+          <div class="flex items-center gap-3 text-xs sm:text-sm text-on-surface-variant font-medium">
+            <span id="book-author">By Author</span>
+            <span>•</span>
+            <span id="estimated-reading-time">~4 min read</span>
+          </div>
+        </div>
+
+        <!-- The Main Text Reading Body -->
+        <div id="chapter-content-body" class="prose-reader font-reader text-lg sm:text-xl text-on-surface leading-relaxed sm:leading-loose">
+          <!-- Text rendered here paragraph by paragraph -->
+        </div>
+
+      </article>
+
+      <!-- BOTTOM CHAPTER NAVIGATION -->
+      <section class="w-full max-w-3xl mt-8 sm:mt-10 bg-surface-container-lowest/80 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-outline-variant/30 flex items-center justify-between gap-4 shadow-sm">
+        
+        <!-- Previous Button -->
+        <button id="btn-prev-chapter" class="inline-flex items-center gap-2 px-4 sm:px-5 py-3 rounded-xl font-headline font-bold text-sm border-2 border-outline-variant/40 hover:border-primary text-on-surface hover:bg-surface-container-low transition-all disabled:opacity-40 disabled:pointer-events-none disabled:border-outline-variant/20">
+          <span class="material-symbols-outlined text-lg" data-icon="arrow_back">arrow_back</span>
+          <span class="hidden sm:inline">Previous</span>
+        </button>
+
+        <!-- Chapter Counter Center Pill -->
+        <div class="text-center px-2">
+          <div id="bottom-chapter-indicator" class="font-headline font-bold text-sm sm:text-base text-primary">
+            Chapter 1 of 10
+          </div>
+          <div id="bottom-chapter-progress" class="text-xs text-on-surface-variant font-medium hidden sm:block">
+            10% completed
+          </div>
+        </div>
+
+        <!-- Next Button -->
+        <button id="btn-next-chapter" class="inline-flex items-center gap-2 px-5 sm:px-6 py-3 rounded-xl font-headline font-bold text-sm bg-primary text-white hover:bg-primary-dim active:scale-[0.98] transition-all shadow-md">
+          <span id="btn-next-text" class="hidden sm:inline">Next</span>
+          <span class="material-symbols-outlined text-lg" data-icon="arrow_forward">arrow_forward</span>
+        </button>
+      </section>
+      <p id="progress-save-status" class="mt-3 min-h-5 text-center text-xs font-medium text-on-surface-variant" role="status" aria-live="polite"></p>
+
+    </main>
+
+    <!-- 5. BOOK COMPLETION STATE (Shown when finishing the last chapter) -->
+    <div id="completion-modal" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 hidden opacity-0 transition-opacity duration-300">
+      <div class="bg-surface-container-lowest max-w-lg w-full rounded-3xl p-8 sm:p-10 shadow-2xl border border-primary-container text-center transform scale-95 transition-transform duration-300" id="completion-card">
+        <div class="w-20 h-20 mx-auto rounded-full bg-primary-container/40 flex items-center justify-center text-primary mb-6">
+          <span class="material-symbols-outlined text-5xl" data-icon="celebration">celebration</span>
+        </div>
+        <div class="inline-block px-3 py-1 bg-primary/10 text-primary font-bold text-xs rounded-full uppercase tracking-wider mb-3">
+          Journey Complete
+        </div>
+        <h2 class="font-headline font-extrabold text-3xl text-on-surface mb-2">Book Completed!</h2>
+        <p class="text-on-surface-variant text-sm sm:text-base mb-8 max-w-md mx-auto">
+          Congratulations on completing <span id="completed-book-title" class="font-bold text-primary">this book</span>. Every page brings new wisdom and brilliant ideas.
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <a href="library.html" class="w-full sm:w-auto px-6 py-3.5 bg-primary text-white font-headline font-bold text-sm rounded-xl shadow-lg hover:bg-primary-dim active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2">
+            <span class="material-symbols-outlined text-lg" data-icon="library_books">library_books</span>
+            Return to Library
+          </a>
+          <button id="btn-read-again" class="w-full sm:w-auto px-6 py-3.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface font-headline font-bold text-sm rounded-xl transition-all inline-flex items-center justify-center gap-2">
+            <span class="material-symbols-outlined text-lg" data-icon="restart_alt">restart_alt</span>
+            Read Again
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="mt-auto border-t border-surface-container-high py-6 px-4">
+    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-on-surface-variant">
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-primary text-base" data-icon="menu_book">menu_book</span>
+        <span class="font-bold text-on-surface">GARCS Cognitive Sanctuary</span>
+        <span>•</span>
+        <span>Personalized Reading Instruction</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <a href="library.html" class="hover:text-primary transition-colors">Library</a>
+        <a href="#" class="hover:text-primary transition-colors">Reading Tips</a>
+        <a href="#" class="hover:text-primary transition-colors">Help Center</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- VANILLA JAVASCRIPT APP LOGIC -->
+  <script>
+    (function () {
+      "use strict";
+
+      /* ==========================================================================
+         1. STATE & CONFIGURATION
+         ========================================================================== */
+      const API_CONFIG = {
+        getBook: (bookId) => `/api/library/books/${bookId}`,
+        saveProgress: (bookId) => `/api/library/books/${bookId}/progress`
+      };
+
+      // Extract book_id from URL query string
+      const urlParams = new URLSearchParams(window.location.search);
+      const bookId = urlParams.get("book_id");
+
+      // Extract student info from localStorage
+      let student = null;
+      try {
+        student = JSON.parse(localStorage.getItem("garcs_student") || "{}");
+      } catch (e) {
+        console.warn("Failed to parse garcs_student from localStorage", e);
+        student = {};
+      }
+      const studentId = student.student_id || null;
+
+      // Internal app state
+      const state = {
+        bookId: bookId,
+        studentId: studentId,
+        book: null,
+        chapters: [],
+        currentChapterIndex: 0,
+        completedChapters: new Set(),
+        readingProgress: null
+      };
+
+      /* ==========================================================================
+         2. DOM ELEMENT REFERENCES
+         ========================================================================== */
+      const dom = {
+        // App states
+        loadingState: document.getElementById("loading-state"),
+        errorState: document.getElementById("error-state"),
+        errorMessageText: document.getElementById("error-message-text"),
+        btnRetry: document.getElementById("btn-retry"),
+        emptyState: document.getElementById("empty-state"),
+        readingContentContainer: document.getElementById("reading-content-container"),
+        
+        // Header
+        headerBookTitle: document.getElementById("header-book-title"),
+        headerChapterBadge: document.getElementById("header-chapter-badge"),
+        headerProgressPercent: document.getElementById("header-progress-percent"),
+        headerProgressBar: document.getElementById("header-progress-bar"),
+        globalProgressBar: document.getElementById("global-progress-bar"),
+        btnToggleChapters: document.getElementById("btn-toggle-chapters"),
+        btnChapterIndicatorPill: document.getElementById("btn-chapter-indicator-pill"),
+        
+        // Reader Body
+        chapterLabelBadge: document.getElementById("chapter-label-badge"),
+        chapterTitle: document.getElementById("chapter-title"),
+        bookAuthor: document.getElementById("book-author"),
+        estimatedReadingTime: document.getElementById("estimated-reading-time"),
+        chapterContentBody: document.getElementById("chapter-content-body"),
+        
+        // Bottom Navigation
+        btnPrevChapter: document.getElementById("btn-prev-chapter"),
+        btnNextChapter: document.getElementById("btn-next-chapter"),
+        btnNextText: document.getElementById("btn-next-text"),
+        bottomChapterIndicator: document.getElementById("bottom-chapter-indicator"),
+        bottomChapterProgress: document.getElementById("bottom-chapter-progress"),
+        progressSaveStatus: document.getElementById("progress-save-status"),
+        
+        // Drawer
+        chapterDrawer: document.getElementById("chapter-drawer"),
+        chapterDrawerBackdrop: document.getElementById("chapter-drawer-backdrop"),
+        btnCloseDrawer: document.getElementById("btn-close-drawer"),
+        drawerChapterList: document.getElementById("drawer-chapter-list"),
+        drawerBookSubtitle: document.getElementById("drawer-book-subtitle"),
+        drawerCompletedCount: document.getElementById("drawer-completed-count"),
+        
+        // Completion
+        completionModal: document.getElementById("completion-modal"),
+        completionCard: document.getElementById("completion-card"),
+        completedBookTitle: document.getElementById("completed-book-title"),
+        btnReadAgain: document.getElementById("btn-read-again")
+      };
+
+      /* ==========================================================================
+         3. INITIALIZATION & DATA FETCHING
+         ========================================================================== */
+      function init() {
+        if (!state.bookId) {
+          showError("No book ID was provided. Please return to the library and select a book to read.");
+          return;
+        }
+
+        bindEvents();
+        loadBookData();
+      }
+
+      function bindEvents() {
+        if (dom.btnRetry) {
+          dom.btnRetry.addEventListener("click", () => loadBookData());
+        }
+
+        // Drawer toggle controls
+        dom.btnToggleChapters.addEventListener("click", openDrawer);
+        dom.btnCloseDrawer.addEventListener("click", closeDrawer);
+        dom.chapterDrawerBackdrop.addEventListener("click", closeDrawer);
+
+        // Chapter next / prev navigation
+        dom.btnPrevChapter.addEventListener("click", async () => {
+          if (state.currentChapterIndex > 0) {
+            await goToChapter(state.currentChapterIndex - 1);
+          }
+        });
+
+        dom.btnNextChapter.addEventListener("click", async () => {
+          const isLastChapter = state.currentChapterIndex >= state.chapters.length - 1;
+          const currentChapter = state.chapters[state.currentChapterIndex];
+          state.completedChapters.add(currentChapter.chapter_number);
+          if (isLastChapter) {
+            await saveReadingProgress(currentChapter.chapter_number);
+            if (state.completedChapters.has(currentChapter.chapter_number)) {
+              showCompletionModal();
+            }
+          } else {
+            await saveReadingProgress(currentChapter.chapter_number);
+            await goToChapter(state.currentChapterIndex + 1);
+          }
+        });
+
+        // Read Again
+        if (dom.btnReadAgain) {
+          dom.btnReadAgain.addEventListener("click", async () => {
+            hideCompletionModal();
+            await goToChapter(0);
+          });
+        }
+
+        // Keyboard shortcuts: Left/Right arrows for chapter paging
+        window.addEventListener("keydown", async (e) => {
+          if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+          if (e.key === "ArrowLeft" && state.currentChapterIndex > 0) {
+            await goToChapter(state.currentChapterIndex - 1);
+          } else if (e.key === "ArrowRight") {
+            if (state.currentChapterIndex < state.chapters.length - 1) {
+              await goToChapter(state.currentChapterIndex + 1);
+            }
+          } else if (e.key === "Escape") {
+            closeDrawer();
+            hideCompletionModal();
+          }
+        });
+
+        window.addEventListener("pagehide", () => {
+          if (state.chapters.length && state.studentId) {
+            saveReadingProgress(state.chapters[state.currentChapterIndex].chapter_number);
+          }
+        });
+      }
+
+      async function loadBookData() {
+        showLoading();
+
+        try {
+          const bookUrl = API_CONFIG.getBook(state.bookId);
+          const response = await fetch(bookUrl);
+
+          if (!response.ok) {
+            throw new Error(`Unable to load book (${response.status})`);
+          }
+
+          const data = await response.json();
+          await handleLoadedData(data);
+        } catch (error) {
+          console.error("Error fetching from API:", error);
+          showError(error.message || "Unable to load this book. Please return to the library and try again.");
+        }
+      }
+
+      async function handleLoadedData(bookData) {
+        if (!bookData) {
+          showError("Unable to load this book. Please return to the library and try again.");
+          return;
+        }
+
+        state.book = bookData;
+        state.chapters = (bookData.chapters || []).sort((a, b) => a.chapter_number - b.chapter_number);
+
+        if (state.chapters.length === 0) {
+          showEmpty();
+          return;
+        }
+
+        await loadReadingProgress();
+
+        renderChapterDrawerList();
+        await goToChapter(state.currentChapterIndex, false, false);
+        showReadingView();
+      }
+
+      /* ==========================================================================
+         4. PROGRESS TRACKING & PERSISTENCE
+         ========================================================================== */
+      async function loadReadingProgress() {
+        if (!state.studentId) {
+          throw new Error("No student session found. Please return to the login page.");
+        }
+
+        const response = await fetch(
+          `${API_CONFIG.saveProgress(state.bookId)}?student_id=${encodeURIComponent(state.studentId)}`
+        );
+        if (!response.ok) {
+          throw new Error(`Unable to load reading progress (${response.status})`);
+        }
+
+        const payload = await response.json();
+        const saved = payload.progress;
+        if (!saved) return;
+
+        state.readingProgress = saved;
+        const completedCount = Number(saved.completed_chapters || 0);
+        state.completedChapters = new Set(
+          state.chapters
+            .filter(chapter => chapter.chapter_number <= completedCount)
+            .map(chapter => chapter.chapter_number)
+        );
+
+        const foundIdx = state.chapters.findIndex(
+          chapter => chapter.id === saved.chapter_id || chapter.chapter_number === saved.current_chapter
+        );
+        if (foundIdx >= 0) state.currentChapterIndex = foundIdx;
+      }
+
+      async function saveReadingProgress(currentChapterNum) {
+        if (!state.studentId || !state.chapters.length) return false;
+
+        const chapter = state.chapters.find(item => item.chapter_number === currentChapterNum);
+        if (!chapter) return false;
+        const completedCount = Math.min(state.completedChapters.size, state.chapters.length);
+        const isComplete = completedCount >= state.chapters.length;
+
+        const progressPayload = {
+          student_id: state.studentId,
+          book_id: state.bookId,
+          chapter_id: chapter.id,
+          current_chapter: currentChapterNum,
+          completed_chapters: completedCount,
+          progress_percent: Math.round((completedCount / state.chapters.length) * 100),
+          reading_position: 0,
+          completed: isComplete
+        };
+
+        setProgressSaveStatus("Saving progress...", "text-on-surface-variant");
+        try {
+          const response = await fetch(API_CONFIG.saveProgress(state.bookId), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(progressPayload),
+            keepalive: true
+          });
+          if (!response.ok) throw new Error(`Save failed (${response.status})`);
+          setProgressSaveStatus("Progress saved", "text-primary");
+          return true;
+        } catch (err) {
+          console.error("Unable to save reading progress:", err);
+          setProgressSaveStatus("Progress could not be saved", "text-error");
+          return false;
+        }
+      }
+
+      function setProgressSaveStatus(message, colorClass) {
+        if (!dom.progressSaveStatus) return;
+        dom.progressSaveStatus.textContent = message;
+        dom.progressSaveStatus.className = `mt-3 min-h-5 text-center text-xs font-medium ${colorClass}`;
+      }
+
+      async function goToChapter(index, autoScroll = true, persist = true) {
+        if (index < 0 || index >= state.chapters.length) return;
+
+        state.currentChapterIndex = index;
+        const chapter = state.chapters[index];
+
+        if (persist) await saveReadingProgress(chapter.chapter_number);
+
+        renderCurrentChapter(autoScroll);
+        updateProgressIndicators();
+        renderChapterDrawerList();
+      }
+
+      /* ==========================================================================
+         5. VIEW UPDATING & RENDERING
+         ========================================================================== */
+      function renderCurrentChapter(autoScroll) {
+        const index = state.currentChapterIndex;
+        const chapter = state.chapters[state.currentChapterIndex];
+
+        // Update header metadata
+        if (dom.headerBookTitle) {
+          dom.headerBookTitle.textContent = state.book.title || "Book Reading";
+        }
+        if (dom.drawerBookSubtitle) {
+          dom.drawerBookSubtitle.textContent = state.book.title || "";
+        }
+
+        // Update Chapter text headers
+        if (dom.chapterLabelBadge) {
+          dom.chapterLabelBadge.textContent = `CHAPTER ${chapter.chapter_number}`;
+        }
+        if (dom.chapterTitle) {
+          dom.chapterTitle.textContent = chapter.title || `Chapter ${chapter.chapter_number}`;
+        }
+        if (dom.bookAuthor) {
+          dom.bookAuthor.textContent = state.book.author ? `By ${state.book.author}` : "Lumina Learn";
+        }
+
+        // Render chapter body paragraphs safely
+        renderChapterContent(chapter.content || "");
+
+        // Compute estimated reading time (approx 180 words per minute for young learners)
+        const wordCount = (chapter.content || "").trim().split(/\s+/).length;
+        const minutes = Math.max(1, Math.ceil(wordCount / 180));
+        if (dom.estimatedReadingTime) {
+          dom.estimatedReadingTime.textContent = `~${minutes} min read`;
+        }
+
+        // Update navigation buttons
+        const isFirst = index === 0;
+        const isLast = index === state.chapters.length - 1;
+
+        dom.btnPrevChapter.disabled = isFirst;
+
+        if (isLast) {
+          dom.btnNextText.textContent = "Finish Book";
+          dom.btnNextChapter.classList.remove("bg-primary");
+          dom.btnNextChapter.classList.add("bg-emerald-700");
+          dom.btnNextChapter.querySelector("[data-icon]").setAttribute("data-icon", "task_alt");
+          dom.btnNextChapter.querySelector("[data-icon]").textContent = "task_alt";
+        } else {
+          dom.btnNextText.textContent = "Next Chapter";
+          dom.btnNextChapter.classList.remove("bg-emerald-700");
+          dom.btnNextChapter.classList.add("bg-primary");
+          dom.btnNextChapter.querySelector("[data-icon]").setAttribute("data-icon", "arrow_forward");
+          dom.btnNextChapter.querySelector("[data-icon]").textContent = "arrow_forward";
+        }
+
+        // Scroll to top of reading area smoothly
+        if (autoScroll) {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }
+
+      function renderChapterContent(rawContent) {
+        if (!dom.chapterContentBody) return;
+
+        dom.chapterContentBody.innerHTML = "";
+
+        if (!rawContent || rawContent.trim() === "") {
+          const emptyNotice = document.createElement("p");
+          emptyNotice.className = "text-on-surface-variant italic";
+          emptyNotice.textContent = "No content available for this chapter.";
+          dom.chapterContentBody.appendChild(emptyNotice);
+          return;
+        }
+
+        // Split by paragraphs (double line breaks or single if clean)
+        const paragraphs = rawContent.split(/\n\s*\n|\r\n\s*\r\n/);
+
+        paragraphs.forEach(paragraphText => {
+          const cleanText = paragraphText.trim();
+          if (cleanText.length > 0) {
+            const p = document.createElement("p");
+            // Allow basic line breaks within paragraphs
+            p.innerHTML = cleanText.replace(/\n/g, "<br>");
+            dom.chapterContentBody.appendChild(p);
+          }
+        });
+      }
+
+      function updateProgressIndicators() {
+        const total = state.chapters.length;
+        if (total === 0) return;
+
+        const currentNum = state.currentChapterIndex + 1;
+        const completedCount = state.completedChapters.size;
+        const percent = Math.round((completedCount / total) * 100);
+
+        // Header indicators
+        if (dom.headerChapterBadge) {
+          dom.headerChapterBadge.textContent = `Chapter ${currentNum} of ${total}`;
+        }
+        if (dom.headerProgressPercent) {
+          dom.headerProgressPercent.textContent = `${percent}%`;
+        }
+        if (dom.headerProgressBar) {
+          dom.headerProgressBar.style.width = `${percent}%`;
+        }
+        if (dom.globalProgressBar) {
+          // Read depth bar represents current chapter position or completed percentage
+          const stepPercent = Math.round((currentNum / total) * 100);
+          dom.globalProgressBar.style.width = `${stepPercent}%`;
+        }
+        if (dom.btnChapterIndicatorPill) {
+          dom.btnChapterIndicatorPill.textContent = `${currentNum}/${total}`;
+        }
+
+        // Bottom section indicators
+        if (dom.bottomChapterIndicator) {
+          dom.bottomChapterIndicator.textContent = `Chapter ${currentNum} of ${total}`;
+        }
+        if (dom.bottomChapterProgress) {
+          dom.bottomChapterProgress.textContent = `${percent}% of book completed (${completedCount}/${total})`;
+        }
+
+        // Drawer count
+        if (dom.drawerCompletedCount) {
+          dom.drawerCompletedCount.textContent = `${completedCount} of ${total} chapters finished`;
+        }
+      }
+
+      function renderChapterDrawerList() {
+        if (!dom.drawerChapterList) return;
+
+        dom.drawerChapterList.innerHTML = "";
+
+        state.chapters.forEach((ch, idx) => {
+          const isCurrent = idx === state.currentChapterIndex;
+          const isCompleted = state.completedChapters.has(ch.chapter_number);
+
+          const itemBtn = document.createElement("button");
+          itemBtn.type = "button";
+          itemBtn.className = `w-full text-left p-3.5 rounded-2xl flex items-center gap-3 transition-all duration-200 ${
+            isCurrent
+              ? "bg-primary text-white shadow-md font-semibold"
+              : isCompleted
+              ? "bg-surface-container-low text-on-surface hover:bg-surface-container-high font-medium"
+              : "bg-surface-container-lowest border border-outline-variant/20 hover:bg-surface-container-low text-on-surface"
+          }`;
+
+          // Status icon
+          let iconHtml = "";
+          if (isCurrent) {
+            iconHtml = `<span class="material-symbols-outlined text-xl text-primary-container shrink-0" data-icon="auto_stories">auto_stories</span>`;
+          } else if (isCompleted) {
+            iconHtml = `<span class="material-symbols-outlined text-xl text-primary shrink-0" data-icon="check_circle">check_circle</span>`;
+          } else {
+            iconHtml = `<span class="w-5 h-5 rounded-full border-2 border-outline-variant/50 flex items-center justify-center text-[10px] font-bold text-outline-variant shrink-0">${ch.chapter_number}</span>`;
+          }
+
+          itemBtn.innerHTML = `
+            ${iconHtml}
+            <div class="flex-1 min-w-0">
+              <div class="text-[11px] ${isCurrent ? 'text-primary-container' : 'text-on-surface-variant'} uppercase tracking-wider font-bold">
+                Chapter ${ch.chapter_number}
+              </div>
+              <div class="text-sm truncate ${isCurrent ? 'text-white font-bold' : 'text-on-surface'}">
+                ${ch.title || `Chapter ${ch.chapter_number}`}
+              </div>
+            </div>
+            ${isCurrent ? '<span class="text-[10px] uppercase tracking-wider font-bold bg-white/20 px-2 py-0.5 rounded-full">Active</span>' : ''}
+          `;
+
+          itemBtn.addEventListener("click", async () => {
+            await goToChapter(idx);
+            closeDrawer();
+          });
+
+          dom.drawerChapterList.appendChild(itemBtn);
+        });
+      }
+
+      /* ==========================================================================
+         6. DRAWER & MODAL TOGGLES
+         ========================================================================== */
+      function openDrawer() {
+        dom.chapterDrawerBackdrop.classList.remove("hidden");
+        setTimeout(() => {
+          dom.chapterDrawerBackdrop.classList.remove("opacity-0");
+          dom.chapterDrawer.classList.remove("translate-x-full");
+        }, 10);
+        dom.btnToggleChapters.setAttribute("aria-expanded", "true");
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeDrawer() {
+        dom.chapterDrawer.classList.add("translate-x-full");
+        dom.chapterDrawerBackdrop.classList.add("opacity-0");
+        dom.btnToggleChapters.setAttribute("aria-expanded", "false");
+        document.body.style.overflow = "";
+        setTimeout(() => {
+          dom.chapterDrawerBackdrop.classList.add("hidden");
+        }, 300);
+      }
+
+      function showCompletionModal() {
+        if (dom.completedBookTitle && state.book) {
+          dom.completedBookTitle.textContent = `"${state.book.title}"`;
+        }
+        dom.completionModal.classList.remove("hidden");
+        setTimeout(() => {
+          dom.completionModal.classList.remove("opacity-0");
+          dom.completionCard.classList.remove("scale-95");
+          dom.completionCard.classList.add("scale-100");
+        }, 10);
+      }
+
+      function hideCompletionModal() {
+        dom.completionCard.classList.remove("scale-100");
+        dom.completionCard.classList.add("scale-95");
+        dom.completionModal.classList.add("opacity-0");
+        setTimeout(() => {
+          dom.completionModal.classList.add("hidden");
+        }, 300);
+      }
+
+      /* ==========================================================================
+         7. STATE SWITCHERS
+         ========================================================================== */
+      function showLoading() {
+        dom.loadingState.classList.remove("hidden");
+        dom.errorState.classList.add("hidden");
+        dom.emptyState.classList.add("hidden");
+        dom.readingContentContainer.classList.add("hidden");
+      }
+
+      function showError(message) {
+        dom.loadingState.classList.add("hidden");
+        dom.errorState.classList.remove("hidden");
+        dom.emptyState.classList.add("hidden");
+        dom.readingContentContainer.classList.add("hidden");
+        if (dom.errorMessageText && message) {
+          dom.errorMessageText.textContent = message;
+        }
+      }
+
+      function showEmpty() {
+        dom.loadingState.classList.add("hidden");
+        dom.errorState.classList.add("hidden");
+        dom.emptyState.classList.remove("hidden");
+        dom.readingContentContainer.classList.add("hidden");
+      }
+
+      function showReadingView() {
+        dom.loadingState.classList.add("hidden");
+        dom.errorState.classList.add("hidden");
+        dom.emptyState.classList.add("hidden");
+        dom.readingContentContainer.classList.remove("hidden");
+      }
+
+      // Launch application
+      init();
+    })();
+  </script>
+</body>
+</html>

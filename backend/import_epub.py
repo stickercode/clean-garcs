@@ -1,7 +1,18 @@
 """
 import_epub.py
 
-Import an EPUB book into the GARCS SQLite database.
+Import an EPUB book into the GARCS LIBRARY.
+
+IMPORTANT:
+    EPUB files are imported into:
+        LibraryBook
+        LibraryChapter
+
+They are NOT imported into:
+        Passage
+        Chapter
+
+Assessment passages remain managed exclusively by seed.py.
 
 Usage:
 
@@ -23,12 +34,12 @@ The importer:
     1. Opens the EPUB.
     2. Extracts title and author metadata.
     3. Extracts the cover image.
-    4. Attempts to identify actual reading chapters.
-    5. Creates one Passage record.
-    6. Creates one Chapter record for each chapter.
-    7. Stores the chapter text in the database.
+    4. Identifies likely reading chapters.
+    5. Creates ONE LibraryBook record.
+    6. Creates LibraryChapter records for each chapter.
+    7. Stores chapter text in the database.
 
-The EPUB file itself is NOT stored inside SQLite.
+The EPUB binary itself is NOT stored in SQLite.
 """
 
 import argparse
@@ -39,11 +50,10 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from ebooklib import epub, ITEM_DOCUMENT, ITEM_IMAGE
 
-# Import your existing Flask application and database/models.
-#
-# This assumes import_epub.py is inside the same backend/ directory
-# as app.py.
-from app import app, db, Passage, Chapter
+# IMPORTANT:
+# These are the LIBRARY models.
+# Do NOT change these to Passage / Chapter.
+from app import app, db, LibraryBook, LibraryChapter
 
 
 # ============================================================
@@ -57,8 +67,7 @@ GRADE_BANDS = {
 }
 
 
-# Words commonly found in EPUB files that are NOT actual
-# reading chapters.
+# EPUB documents that should not become reading chapters.
 IGNORED_TITLES = {
     "cover",
     "title page",
@@ -77,8 +86,10 @@ IGNORED_TITLES = {
     "colophon",
     "the full project gutenberg license",
     "project gutenberg license",
+    "project gutenberg",
     "license",
     "legal notice",
+    "terms of use",
 }
 
 
@@ -98,13 +109,13 @@ def clean_text(html_content):
         "script",
         "style",
         "nav",
-        "noscript"
+        "noscript",
+        "svg"
     ]):
         tag.decompose()
 
     text = soup.get_text("\n")
 
-    # Normalize whitespace while preserving paragraphs.
     lines = []
 
     for line in text.splitlines():
@@ -139,11 +150,8 @@ def clean_title(title):
 
 def looks_like_chapter(title, text):
     """
-    Decide whether an EPUB document appears to be a real
-    reading chapter.
-
-    This intentionally uses heuristics because EPUB files
-    differ considerably in structure.
+    Determine whether an EPUB document appears to contain
+    actual reading content.
     """
 
     normalized_title = clean_title(title).lower()
@@ -152,9 +160,9 @@ def looks_like_chapter(title, text):
     if normalized_title in IGNORED_TITLES:
         return False
 
-    # Ignore very short documents.
     word_count = len(text.split())
 
+    # Ignore extremely short documents.
     if word_count < 100:
         return False
 
@@ -169,16 +177,20 @@ def looks_like_chapter(title, text):
     ]
 
     for pattern in chapter_patterns:
-        if re.search(pattern, normalized_title, re.IGNORECASE):
+        if re.search(
+            pattern,
+            normalized_title,
+            re.IGNORECASE
+        ):
             return True
 
-    # If there is no useful title but the document has
-    # substantial text, it may still be a chapter.
+    # If there is no useful title but substantial text exists,
+    # treat it as likely reading content.
     if not normalized_title and word_count >= 300:
         return True
 
-    # Long documents are often chapter-like even when the
-    # EPUB has poor metadata.
+    # Long documents are usually reading chapters even when
+    # their EPUB metadata is poor.
     if word_count >= 300:
         return True
 
@@ -194,21 +206,36 @@ def extract_document_title(item):
     Try to find a useful title for an EPUB document.
     """
 
-    soup = BeautifulSoup(item.get_content(), "html.parser")
+    soup = BeautifulSoup(
+        item.get_content(),
+        "html.parser"
+    )
 
     # First try headings.
     for tag_name in ["h1", "h2", "h3"]:
+
         heading = soup.find(tag_name)
 
         if heading:
-            title = clean_title(heading.get_text(" ", strip=True))
+            title = clean_title(
+                heading.get_text(
+                    " ",
+                    strip=True
+                )
+            )
 
             if title:
                 return title
 
-    # Then try the HTML title.
+    # Then try HTML title.
     if soup.title:
-        title = clean_title(soup.title.get_text(" ", strip=True))
+
+        title = clean_title(
+            soup.title.get_text(
+                " ",
+                strip=True
+            )
+        )
 
         if title:
             return title
@@ -226,17 +253,24 @@ def extract_metadata(book):
     """
 
     title = ""
-
     authors = []
 
-    title_values = book.get_metadata("DC", "title")
+    title_values = book.get_metadata(
+        "DC",
+        "title"
+    )
 
     if title_values:
+
         title = title_values[0][0]
 
-    author_values = book.get_metadata("DC", "creator")
+    author_values = book.get_metadata(
+        "DC",
+        "creator"
+    )
 
     for value, attributes in author_values:
+
         if value:
             authors.append(value)
 
@@ -250,77 +284,128 @@ def extract_metadata(book):
 # EXTRACT COVER
 # ============================================================
 
-def extract_cover(book, output_directory, passage_id):
+def extract_cover(
+    book,
+    output_directory,
+    book_id
+):
     """
     Attempt to extract the EPUB cover image.
 
     Returns:
-        Relative path suitable for storing in Passage.cover_image
+        A frontend-relative path such as:
+
+            /static/covers/1_cover.jpg
+
         or None if no cover is found.
     """
 
-    output_directory = Path(output_directory)
-    output_directory.mkdir(parents=True, exist_ok=True)
+    output_directory = Path(
+        output_directory
+    )
+
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     cover_item = None
 
     # --------------------------------------------------------
-    # Method 1: EPUB metadata cover reference
+    # Method 1:
+    # EPUB metadata cover reference
     # --------------------------------------------------------
 
-    metadata = book.get_metadata("OPF", "cover")
+    metadata = book.get_metadata(
+        "OPF",
+        "cover"
+    )
 
     if metadata:
+
         for value, attributes in metadata:
-            cover_id = attributes.get("content")
+
+            cover_id = attributes.get(
+                "content"
+            )
 
             if cover_id:
-                cover_item = book.get_item_with_id(cover_id)
+
+                cover_item = (
+                    book.get_item_with_id(
+                        cover_id
+                    )
+                )
 
                 if cover_item:
                     break
 
     # --------------------------------------------------------
-    # Method 2: Find an image whose filename contains "cover"
+    # Method 2:
+    # Search image filenames for "cover"
     # --------------------------------------------------------
 
     if cover_item is None:
-        for item in book.get_items_of_type(ITEM_IMAGE):
+
+        for item in book.get_items_of_type(
+            ITEM_IMAGE
+        ):
+
             name = item.get_name().lower()
 
             if "cover" in name:
+
                 cover_item = item
                 break
 
     # --------------------------------------------------------
-    # Method 3: Use the first image as a fallback
+    # Method 3:
+    # Use first image as fallback
     # --------------------------------------------------------
 
     if cover_item is None:
-        images = list(book.get_items_of_type(ITEM_IMAGE))
+
+        images = list(
+            book.get_items_of_type(
+                ITEM_IMAGE
+            )
+        )
 
         if images:
+
             cover_item = images[0]
 
     if cover_item is None:
         return None
 
-    image_name = Path(cover_item.get_name()).name
+    image_name = Path(
+        cover_item.get_name()
+    ).name
 
-    # Prevent weird filenames.
+    # Prevent problematic filenames.
     image_name = re.sub(
         r"[^A-Za-z0-9._-]",
         "_",
         image_name
     )
 
-    output_path = output_directory / f"{passage_id}_{image_name}"
+    output_path = (
+        output_directory
+        / f"{book_id}_{image_name}"
+    )
 
-    with open(output_path, "wb") as file:
-        file.write(cover_item.get_content())
+    with open(
+        output_path,
+        "wb"
+    ) as file:
 
-    # This path is what the frontend can use.
-    return f"/static/covers/{output_path.name}"
+        file.write(
+            cover_item.get_content()
+        )
+
+    return (
+        f"/static/covers/{output_path.name}"
+    )
 
 
 # ============================================================
@@ -331,7 +416,7 @@ def extract_chapters(book):
     """
     Extract likely reading chapters from the EPUB.
 
-    Returns a list:
+    Returns:
 
         [
             {
@@ -344,32 +429,48 @@ def extract_chapters(book):
 
     chapters = []
 
-    # Prefer EPUB spine order because it represents the
-    # intended reading order.
+    # EPUB spine represents the intended reading order.
     spine_items = []
 
     for spine_entry in book.spine:
+
         item_id = spine_entry[0]
 
-        item = book.get_item_with_id(item_id)
+        item = book.get_item_with_id(
+            item_id
+        )
 
-        if item and item.get_type() == ITEM_DOCUMENT:
+        if (
+            item
+            and item.get_type() == ITEM_DOCUMENT
+        ):
+
             spine_items.append(item)
 
     for item in spine_items:
 
-        content = clean_text(item.get_content())
+        content = clean_text(
+            item.get_content()
+        )
 
         if not content:
             continue
 
-        title = extract_document_title(item)
+        title = extract_document_title(
+            item
+        )
 
-        if not looks_like_chapter(title, content):
+        if not looks_like_chapter(
+            title,
+            content
+        ):
             continue
 
         if not title:
-            title = f"Chapter {len(chapters) + 1}"
+
+            title = (
+                f"Chapter {len(chapters) + 1}"
+            )
 
         chapters.append({
             "title": title,
@@ -390,34 +491,52 @@ def import_epub(
     featured=False,
 ):
     """
-    Import one EPUB into the database.
+    Import one EPUB into LibraryBook and LibraryChapter.
+
+    Assessment Passage/Chapter records are never modified.
     """
 
-    epub_path = Path(epub_path)
+    epub_path = Path(
+        epub_path
+    )
+
+    # --------------------------------------------------------
+    # Validate file
+    # --------------------------------------------------------
 
     if not epub_path.exists():
+
         raise FileNotFoundError(
             f"EPUB file not found: {epub_path}"
         )
 
     if epub_path.suffix.lower() != ".epub":
+
         raise ValueError(
             "The selected file is not an EPUB."
         )
 
     if grade_band not in GRADE_BANDS:
+
         raise ValueError(
-            "Invalid grade band. Use 1, 2, or 3."
+            "Invalid grade band. "
+            "Use 1, 2, or 3."
         )
 
     print()
     print("=" * 60)
-    print("GARCS EPUB IMPORTER")
+    print("GARCS EPUB LIBRARY IMPORTER")
     print("=" * 60)
     print(f"File:       {epub_path}")
-    print(f"Grade band: {GRADE_BANDS[grade_band]}")
-    print(f"Category:   {category or 'Reading'}")
-    print(f"Featured:   {featured}")
+    print(
+        f"Grade band: {GRADE_BANDS[grade_band]}"
+    )
+    print(
+        f"Category:   {category or 'Reading'}"
+    )
+    print(
+        f"Featured:   {featured}"
+    )
     print("=" * 60)
 
     # --------------------------------------------------------
@@ -427,8 +546,13 @@ def import_epub(
     print("\nReading EPUB...")
 
     try:
-        book = epub.read_epub(str(epub_path))
+
+        book = epub.read_epub(
+            str(epub_path)
+        )
+
     except Exception as exc:
+
         raise RuntimeError(
             f"Could not read EPUB: {exc}"
         ) from exc
@@ -437,43 +561,73 @@ def import_epub(
     # Metadata
     # --------------------------------------------------------
 
-    title, author = extract_metadata(book)
+    title, author = extract_metadata(
+        book
+    )
 
     if not title:
+
         title = epub_path.stem
 
-    print(f"Title:      {title}")
-    print(f"Author:     {author or 'Unknown'}")
+    print(
+        f"Title:      {title}"
+    )
 
-    existing = Passage.query.filter_by(
-        title=title
-    ).first()
+    print(
+        f"Author:     {author or 'Unknown'}"
+    )
+
+    # --------------------------------------------------------
+    # Prevent duplicate library books
+    # --------------------------------------------------------
+
+    existing = (
+        LibraryBook.query
+        .filter_by(title=title)
+        .first()
+    )
 
     if existing:
+
         raise RuntimeError(
-            f"A passage titled '{title}' already exists "
-            f"(ID {existing.id}). Import cancelled."
+            f"A library book titled "
+            f"'{title}' already exists "
+            f"(ID {existing.id}). "
+            f"Import cancelled."
         )
 
     # --------------------------------------------------------
-    # Extract chapters BEFORE modifying database
+    # Extract chapters BEFORE touching database
     # --------------------------------------------------------
 
     print("\nExtracting chapters...")
 
-    chapters = extract_chapters(book)
+    chapters = extract_chapters(
+        book
+    )
 
     if not chapters:
+
         raise RuntimeError(
-            "No chapters could be detected in this EPUB.\n"
-            "The EPUB may use an unusual structure and will "
-            "need to be inspected manually."
+            "No chapters could be detected "
+            "in this EPUB.\n"
+            "The EPUB may use an unusual "
+            "structure and will need to be "
+            "inspected manually."
         )
 
-    print(f"Detected {len(chapters)} chapters.")
+    print(
+        f"Detected {len(chapters)} chapters."
+    )
 
-    for index, chapter in enumerate(chapters, start=1):
-        word_count = len(chapter["content"].split())
+    for index, chapter in enumerate(
+        chapters,
+        start=1
+    ):
+
+        word_count = len(
+            chapter["content"].split()
+        )
 
         print(
             f"  {index:>3}. "
@@ -482,37 +636,36 @@ def import_epub(
         )
 
     # --------------------------------------------------------
-    # Create Passage
+    # Create LibraryBook
     # --------------------------------------------------------
 
-    passage = Passage(
+    library_book = LibraryBook(
         title=title,
+        author=author or None,
+        description=(
+            f"{title}"
+            + (
+                f" by {author}"
+                if author
+                else ""
+            )
+        ),
+        category=category or "Reading",
         grade_band=grade_band,
+        is_featured=featured,
     )
 
-    # These fields only exist if you've added them to Passage.
-    if hasattr(Passage, "author"):
-        passage.author = author
+    db.session.add(
+        library_book
+    )
 
-    if hasattr(Passage, "category"):
-        passage.category = category or "Reading"
-
-    if hasattr(Passage, "is_featured"):
-        passage.is_featured = featured
-
-    # Store a basic description if your Passage model has it.
-    if hasattr(Passage, "description"):
-        passage.description = (
-            f"{title}"
-            + (f" by {author}" if author else "")
-        )
-
-    db.session.add(passage)
-
-    # Flush so SQLite gives us the Passage ID.
+    # Generate the LibraryBook ID.
     db.session.flush()
 
-    print(f"\nCreated Passage ID: {passage.id}")
+    print(
+        f"\nCreated LibraryBook ID: "
+        f"{library_book.id}"
+    )
 
     # --------------------------------------------------------
     # Cover
@@ -526,60 +679,103 @@ def import_epub(
     )
 
     try:
+
         cover_path = extract_cover(
             book,
             cover_directory,
-            passage.id
+            library_book.id
         )
 
         if cover_path:
-            print(f"Cover:      {cover_path}")
 
-            if hasattr(Passage, "cover_image"):
-                passage.cover_image = cover_path
+            print(
+                f"Cover:      {cover_path}"
+            )
+
+            library_book.cover_image = (
+                cover_path
+            )
+
+        else:
+
+            print(
+                "Cover:      No cover found"
+            )
 
     except Exception as exc:
+
         print(
-            f"Warning: could not extract cover: {exc}"
+            f"Warning: could not extract "
+            f"cover: {exc}"
         )
 
     # --------------------------------------------------------
-    # Create Chapters
+    # Create LibraryChapter records
     # --------------------------------------------------------
 
-    print("\nCreating chapters...")
+    print(
+        "\nCreating library chapters..."
+    )
 
-    for number, chapter_data in enumerate(chapters, start=1):
+    for number, chapter_data in enumerate(
+        chapters,
+        start=1
+    ):
 
-        chapter = Chapter(
-            passage_id=passage.id,
+        chapter = LibraryChapter(
+            book_id=library_book.id,
             chapter_number=number,
             title=chapter_data["title"],
             content=chapter_data["content"],
         )
 
-        db.session.add(chapter)
+        db.session.add(
+            chapter
+        )
 
     # --------------------------------------------------------
     # Commit
     # --------------------------------------------------------
 
     try:
+
         db.session.commit()
 
     except Exception:
+
         db.session.rollback()
+
         raise
+
+    # --------------------------------------------------------
+    # Success
+    # --------------------------------------------------------
 
     print()
     print("=" * 60)
-    print("IMPORT SUCCESSFUL")
+    print("LIBRARY IMPORT SUCCESSFUL")
     print("=" * 60)
-    print(f"Passage ID: {passage.id}")
-    print(f"Title:      {passage.title}")
-    print(f"Author:     {author or 'Unknown'}")
-    print(f"Chapters:   {len(chapters)}")
-    print(f"Grade band: {GRADE_BANDS[grade_band]}")
+    print(
+        f"LibraryBook ID: {library_book.id}"
+    )
+    print(
+        f"Title:          {library_book.title}"
+    )
+    print(
+        f"Author:         "
+        f"{author or 'Unknown'}"
+    )
+    print(
+        f"Chapters:       {len(chapters)}"
+    )
+    print(
+        f"Grade band:     "
+        f"{GRADE_BANDS[grade_band]}"
+    )
+    print(
+        "Destination:    LibraryBook / "
+        "LibraryChapter"
+    )
     print("=" * 60)
     print()
 
@@ -591,7 +787,10 @@ def import_epub(
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Import an EPUB into the GARCS library."
+        description=(
+            "Import an EPUB into the "
+            "GARCS library."
+        )
     )
 
     parser.add_argument(
@@ -614,7 +813,10 @@ def main():
     parser.add_argument(
         "--category",
         default="Reading",
-        help="Book category, e.g. Adventure, Science, History"
+        help=(
+            "Book category, e.g. "
+            "Adventure, Science, History"
+        )
     )
 
     parser.add_argument(
@@ -628,6 +830,7 @@ def main():
     with app.app_context():
 
         try:
+
             import_epub(
                 epub_path=args.epub,
                 grade_band=args.grade_band,

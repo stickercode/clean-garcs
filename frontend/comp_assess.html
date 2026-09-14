@@ -13,181 +13,7 @@
 <div id="app" style="max-width:580px;margin:0 auto;padding:1.5rem;padding-bottom:5rem;"></div>
 
 <script>
-// // ============================================================
-// // DATA — PASSAGES & QUESTIONS (DEPRECATED)
-// // ============================================================
-// let passages = [];
 
-// async function loadPassages() {
-//   try {
-//     const res = await fetch('/api/assessment/passages');
-//     if (!res.ok) {
-//       throw new Error('Unable to load passages');
-//     }
-
-//     passages = await res.json();
-//   } catch (err) {
-//     console.error(err);
-//     passages = [];
-//   }
-// }
-
-// // ============================================================
-// // RANDOM FOREST CLASSIFIER — 11 Decision Trees
-// // ============================================================
-// function extractFeatures(answers, passage, readingMs) {
-//   const qs = passage.questions || [];
-//   const correctness = qs.map((q, i) => answers[i] === q.correct);
-
-//   const literal = qs.filter((q, i) => q.type === 'literal' && correctness[i]);
-//   const inferential = qs.filter((q, i) => q.type === 'inferential' && correctness[i]);
-//   const vocabulary = qs.filter((q, i) => (q.type === 'vocabulary' || q.type === 'vocab') && correctness[i]);
-//   const mainIdea = qs.filter((q, i) => (q.type === 'main_idea' || q.type === 'critical') && correctness[i]);
-
-//   const lit_acc = qs.filter(q => q.type === 'literal').length
-//     ? literal.length / qs.filter(q => q.type === 'literal').length
-//     : 0;
-//   const inf_acc = qs.filter(q => q.type === 'inferential').length
-//     ? inferential.length / qs.filter(q => q.type === 'inferential').length
-//     : 0;
-//   const voc_acc = qs.filter(q => q.type === 'vocabulary' || q.type === 'vocab').length
-//     ? vocabulary.length / qs.filter(q => q.type === 'vocabulary' || q.type === 'vocab').length
-//     : 0;
-//   const mid_acc = qs.filter(q => q.type === 'main_idea' || q.type === 'critical').length
-//     ? mainIdea.length / qs.filter(q => q.type === 'main_idea' || q.type === 'critical').length
-//     : 0;
-//   const overall = correctness.length ? correctness.filter(Boolean).length / correctness.length : 0;
-//   const readSec = readingMs / 1000;
-//   const time_f = Math.min(1, Math.max(0, (readSec - 20) / 160));
-//   return { lit_acc, inf_acc, voc_acc, mid_acc, overall, time_f, diff: passage.difficulty, correct: correctness };
-// }
-
-// // Each tree returns a band 0–5
-// // 0=<400L  1=400-600L  2=600-800L  3=800-1000L  4=1000-1200L  5=>1200L
-// const trees = [
-//   // T1: Overall + difficulty
-//   f => {
-//     const b = f.diff;
-//     if (f.overall >= 0.8) return Math.min(5, b+2);
-//     if (f.overall >= 0.6) return Math.min(5, b+1);
-//     if (f.overall >= 0.4) return b;
-//     return Math.max(0, b-1);
-//   },
-//   // T2: Vocabulary depth
-//   f => {
-//     const b = f.diff;
-//     if (f.voc_acc===1 && f.inf_acc===1) return Math.min(5, b+2);
-//     if (f.voc_acc===1) return Math.min(5, b+1);
-//     if (f.voc_acc===0 && f.lit_acc<0.5) return Math.max(0, b-1);
-//     return b;
-//   },
-//   // T3: Inferential + main idea (deep comprehension)
-//   f => {
-//     const deep = (f.inf_acc + f.mid_acc) / 2;
-//     const b = f.diff;
-//     if (deep >= 1) return Math.min(5, b+2);
-//     if (deep >= 0.5) return Math.min(5, b+1);
-//     if (deep === 0) return Math.max(0, b-1);
-//     return b;
-//   },
-//   // T4: Literal comprehension focus
-//   f => {
-//     const b = f.diff;
-//     if (f.lit_acc < 0.5) return Math.max(0, b-1);
-//     if (f.lit_acc >= 1 && f.overall >= 0.7) return Math.min(5, b+1);
-//     return b;
-//   },
-//   // T5: Time factor bonus
-//   f => {
-//     const b = f.diff;
-//     const tb = f.time_f > 0.45 ? 1 : 0;
-//     const ab = f.overall >= 0.8 ? 1 : f.overall < 0.4 ? -1 : 0;
-//     return Math.min(5, Math.max(0, b + ab + tb));
-//   },
-//   // T6: Weighted composite
-//   f => {
-//     const s = f.lit_acc*0.2 + f.inf_acc*0.3 + f.voc_acc*0.3 + f.mid_acc*0.2;
-//     const b = f.diff;
-//     if (s >= 0.8) return Math.min(5, b+2);
-//     if (s >= 0.6) return Math.min(5, b+1);
-//     if (s >= 0.4) return b;
-//     return Math.max(0, b-1);
-//   },
-//   // T7: Difficulty-specific rules
-//   f => {
-//     if (f.diff===0) {
-//       if (f.overall>=0.8) return 2; if (f.overall>=0.5) return 1; return 0;
-//     } else if (f.diff===1) {
-//       if (f.overall>=0.8) return 3; if (f.overall>=0.6) return 2; if (f.overall>=0.4) return 1; return 0;
-//     } else {
-//       if (f.overall>=0.8) return 4; if (f.overall>=0.6) return 3; if (f.overall>=0.4) return 2; return 1;
-//     }
-//   },
-//   // T8: Vocab + Inferential combo
-//   f => {
-//     const d = (f.voc_acc + f.inf_acc) / 2;
-//     const b = f.diff;
-//     if (d >= 1) return Math.min(5, b+2);
-//     if (d >= 0.5) return Math.min(5, b+1);
-//     return Math.max(0, b - (d===0?1:0));
-//   },
-//   // T9: Normalized all-feature average
-//   f => {
-//     const avg = (f.lit_acc+f.inf_acc+f.voc_acc+f.mid_acc+f.time_f)/5;
-//     const b = f.diff;
-//     return Math.min(5, Math.max(0, b + Math.round(avg*2) - 1));
-//   },
-//   // T10: Penalize weak vocabulary heavily
-//   f => {
-//     const b = f.diff;
-//     if (f.voc_acc===0 && f.inf_acc===0) return Math.max(0, b-1);
-//     if (f.voc_acc===1 && f.mid_acc===1) return Math.min(5, b+2);
-//     return b + (f.overall >= 0.6 ? 1 : 0);
-//   },
-//   // T11: High-performer detection
-//   f => {
-//     const b = f.diff;
-//     const perfect = f.overall === 1;
-//     const strong  = f.overall >= 0.8 && f.time_f > 0.3;
-//     const weak    = f.overall < 0.4;
-//     if (perfect) return Math.min(5, b+3);
-//     if (strong)  return Math.min(5, b+2);
-//     if (weak)    return Math.max(0, b-1);
-//     return Math.min(5, b+1);
-//   }
-// ];
-
-// function runRandomForest(features) {
-//   const votes = trees.map(t => t(features));
-//   const counts = {};
-//   votes.forEach(v => { counts[v] = (counts[v]||0)+1; });
-//   const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
-//   const band = parseInt(sorted[0][0]);
-
-//   const lexileBases = [300, 500, 700, 860, 1100, 1300];
-//   const ranges      = ['200L–400L','400L–600L','600L–800L','800L–1000L','1000L–1200L','1200L+'];
-//   const labels      = ['Early Reader','Developing Reader','Intermediate Reader','Proficient Reader','Advanced Reader','Expert Reader'];
-//   const gradeEqs    = ['Grades 1–3','Grades 3–5','Grades 5–7','Grades 7–9','Grades 9–11','Grades 11–12+'];
-//   const colors      = ['#f59e0b','#3b82f6','#8b5cf6','#00675b','#059669','#0d9488'];
-//   const bgColors    = ['#fef3c7','#dbeafe','#ede9fe','#d4fffb','#d1fae5','#ccfbf1'];
-
-//   const offset = Math.round((features.overall - 0.5) * 90);
-//   const lexile = Math.max(100, Math.min(1400, lexileBases[band] + offset));
-
-//   const aspects = [
-//     { name:'Literal Comprehension',  score:features.lit_acc, icon:'📖' },
-//     { name:'Inferential Reasoning',  score:features.inf_acc, icon:'🧠' },
-//     { name:'Vocabulary in Context',  score:features.voc_acc, icon:'📝' },
-//     { name:'Main Idea & Purpose',    score:features.mid_acc, icon:'🎯' },
-//   ];
-//   aspects.sort((a,b)=>b.score-a.score);
-//   const strengths  = aspects.slice(0,2).filter(a=>a.score>=0.5).map(a=>a.name);
-//   const growthAreas= aspects.slice(-2).filter(a=>a.score<0.5).map(a=>a.name);
-
-//   return { band, lexile, range:ranges[band], label:labels[band],
-//            gradeEq:gradeEqs[band], color:colors[band], bgColor:bgColors[band],
-//            votes, counts, features, strengths, growthAreas, aspects };
-// }
 // ============================================================
 // APP STATE
 // ============================================================
@@ -203,7 +29,7 @@ const state = {
   answeredCount: 0,
   completedMessage: null,
   sessionId: null,
-  questionLimit: 5
+  questionLimit: 10
 };
 
 // ============================================================
@@ -247,7 +73,7 @@ function renderWelcome() {
       <div style="display:flex;flex-direction:column;gap:1rem;">
         ${[
           ['📄','Read a passage','A short text matched to your grade level'],
-          ['✏️','Answer 5 questions','Literal, inferential, vocabulary & main idea'],
+          ['✏️','Answer 10 questions','Literal, inferential, vocabulary & main idea'],
           ['🤖','Get your reading summary','The adaptive engine reviews your responses and prepares a follow-up path'],
         ].map(([icon,title,desc])=>`<div style="display:flex;align-items:center;gap:0.875rem;">
           <div style="width:2.75rem;height:2.75rem;border-radius:0.875rem;background:var(--surface-container);display:flex;align-items:center;justify-content:center;font-size:1.375rem;flex-shrink:0;">${icon}</div>
@@ -456,7 +282,7 @@ async function loadNextQuestion() {
       const sessionPayload = await sessionRes.json();
 
       state.sessionId = sessionPayload.session_id;
-      state.questionLimit = sessionPayload.question_limit || 5;
+      state.questionLimit = sessionPayload.question_limit || 10;
       state.answeredCount = 0;
     }
 
@@ -643,7 +469,7 @@ async function nextQuestion() {
     state.answeredCount += 1;
 
     // ============================================================
-    // ASSESSMENT HAS REACHED THE 5-QUESTION LIMIT
+    // ASSESSMENT HAS REACHED THE 10-QUESTION LIMIT
     // ============================================================
     if (state.answeredCount >= state.questionLimit) {
 
@@ -693,7 +519,7 @@ function resetApp() {
 
   // IMPORTANT: force the next assessment to create a new session
   state.sessionId = null;
-  state.questionLimit = 5;
+  state.questionLimit = 10;
 
   render();
 }
