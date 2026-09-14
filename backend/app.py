@@ -1,268 +1,1117 @@
-from flask import Flask, request, jsonify, send_file
+"""
+app_phase3.py -- GARCS Phase 3: API layer.
+
+Builds directly on the Phase 1 data model (Student/Passage/Question/Response/
+StudentSkillState) and wires it to the Phase 2 rule-based engine
+(mastery.py + sequencing.py) via the routes specified in the roadmap's
+Phase 3 table:
+
+    /api/register          POST  (extended with password hashing)
+    /api/login             POST  (new)
+    /api/session/start     POST  (new)
+    /api/question/next     GET   (new)
+    /api/answer            POST  (new)
+    /api/progress/<id>     GET   (new)
+    /api/export            GET   (extended for the new Response schema)
+
+/api/predict and /api/passage/<grade> are intentionally NOT present here --
+per the roadmap, they're deprecated from the live MVP path.
+
+HOW TO USE THIS FILE
+---------------------------------------------------------------------------
+1. Put this file, mastery.py, sequencing.py, and seed.py in the same
+   backend/ folder, and rename this file to app.py (replacing your Phase 1
+   app.py -- the models are identical, this just adds the routes).
+2. If you already ran the Phase 1 version and have a database.db with the
+   OLD schema (Student without a real password_hash usage, or missing
+   rows), delete database.db and re-run seed.py -- SQLite's db.create_all()
+   only creates missing tables, it will NOT add new columns to a table
+   that already exists on disk.
+3. Run `python seed.py` once to populate Passage/Question.
+4. Run `python app.py` and hit the endpoints below.
+
+DESIGN DECISIONS WORTH KNOWING ABOUT
+---------------------------------------------------------------------------
+- Password hashing uses werkzeug.security (generate_password_hash /
+  check_password_hash) instead of the roadmap's suggested Flask-Bcrypt.
+  Werkzeug ships as a Flask dependency already, so this avoids adding a
+  new pip package for a thesis MVP. Swap to Flask-Bcrypt later if you
+  want, the call sites are isolated to register()/login().
+- No server-side session/cookie state. /api/login verifies credentials
+  and returns student_id, but every subsequent call (question/next,
+  answer, progress) takes student_id explicitly as a request field/query
+  param, matching how /api/register already returns student_id today.
+  This sidesteps Flask-CORS + cross-origin cookie configuration
+  (supports_credentials=True server-side, credentials:'include' on every
+  fetch client-side) which is a common source of silent bugs for a
+  frontend/backend served from different ports during local dev. If your
+  panel or adviser wants real session-cookie auth, that's a clean Phase 4
+  follow-up, not a Phase 3 blocker.
+- "Answered questions" = every Question this student has ever answered
+  (queried from Response), not scoped to a single login session, since
+  Chapter 3.6.4's schema has no Session/attempt-session table. This means
+  a student won't be re-served the same question across days, which is
+  the more defensible behavior for a mastery-tracking system anyway.
+- Points are awarded here (fixed +10 per correct answer, +25 bonus for
+  moving up a mastery band) because the roadmap's Phase 3 table itself
+  says /api/answer should "award points/badges." Full badge RULES (e.g.
+  "3 correct in a row") are still Phase 5 -- /api/progress/<id> already
+  returns a `badges` field, just empty for now, so Phase 5 only needs to
+  populate it, not change the response shape.
+"""
+
+import csv
+import io
+# from operator import or_
+from sqlalchemy import or_
+
+import random
+from datetime import datetime
+
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from datetime import datetime
-import numpy as np
-import joblib
-import os
-import csv
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from mastery import (
+    SkillState,
+    SKILLS,
+    classify_band,
+    target_difficulty,
+    update_mastery,
+)
+from sequencing import pick_next_question, relax_difficulty
 
 # =====================================
 # APP SETUP
 # =====================================
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+
+app = Flask(
+    __name__,
+    static_folder="../frontend",
+    static_url_path="",
+    instance_path=str(BASE_DIR / "instance"),
+    instance_relative_config=True,
+)
+DATABASE_FILE = Path(app.instance_path) / "database.db"
+DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE_FILE}"
 
 db = SQLAlchemy(app)
+from pathlib import Path
+
+# print("=" * 60)
+# print("INSTANCE:", app.instance_path)
+# print("DATABASE:", Path(app.instance_path) / "database.db")
+# print("=" * 60)
+
 CORS(app)
 
 
 # =====================================
-# DATABASE MODELS
+# DATABASE MODELS  (Chapter 3.6.4 schema — unchanged from Phase 1)
 # =====================================
-class User(db.Model):
+class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100))
+    username = db.Column(db.String(100))
+    student_number = db.Column(db.String(50), unique=True)
+    email = db.Column(db.String(120), unique=True)
     grade = db.Column(db.Integer)
+    password_hash = db.Column(db.String(200))
 
 
-class Attempt(db.Model):
+class Passage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer)
+    title = db.Column(db.String(200), nullable=False)
+    body = db.Column(db.Text)
+    category = db.Column(db.String(50))
+    grade_band = db.Column(db.Integer)
+    cover_image = db.Column(db.String(500))
+    is_featured = db.Column(db.Boolean, default=False)
 
-    # ML FEATURES
-    lit_acc = db.Column(db.Float)
-    inf_acc = db.Column(db.Float)
-    voc_acc = db.Column(db.Float)
-    mid_acc = db.Column(db.Float)
-    overall = db.Column(db.Float)
-    time_f = db.Column(db.Float)
-    diff = db.Column(db.Integer)
+    chapters = db.relationship(
+        "Chapter",
+        backref="passage",
+        lazy=True,
+        cascade="all, delete-orphan"
+    )
 
-    # OUTPUTS
-    lexile = db.Column(db.Integer)
-    band = db.Column(db.Integer)
+class Chapter(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    passage_id = db.Column(
+        db.Integer,
+        db.ForeignKey("passage.id"),
+        nullable=False
+    )
+
+    chapter_number = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+
+class ReadingProgress(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    student_id = db.Column(
+        db.Integer,
+        db.ForeignKey("student.id"),
+        nullable=False
+    )
+
+    passage_id = db.Column(
+        db.Integer,
+        db.ForeignKey("passage.id"),
+        nullable=False
+    )
+
+    current_chapter = db.Column(db.Integer, default=1)
+    completed_chapters = db.Column(db.Integer, default=0)
+    completed = db.Column(db.Boolean, default=False)
 
 
-# =====================================
-# LOAD ML MODELS
-# =====================================
-MODEL_RF_PATH = "rf_model.pkl"
-MODEL_SVM_PATH = "svm_model.pkl"
-
-rf_model = None
-svm_model = None
-
-
-def load_models():
-    global rf_model, svm_model
-
-    if os.path.exists(MODEL_RF_PATH) and os.path.exists(MODEL_SVM_PATH):
-        print("✅ Loading ML models...")
-        rf_model = joblib.load(MODEL_RF_PATH)
-        svm_model = joblib.load(MODEL_SVM_PATH)
-    else:
-        print("⚠️ Models not found. Run train_model.py first.")
+class Question(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    passage_id = db.Column(db.Integer, db.ForeignKey('passage.id'))
+    prompt = db.Column(db.Text)
+    choices = db.Column(db.JSON)
+    correct_index = db.Column(db.Integer)
+    skill_tag = db.Column(db.String(20))
+    difficulty = db.Column(db.String(10))
 
 
-# =====================================
-# INIT DB + LOAD MODELS
-# =====================================
+class Response(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'))
+    session_id = db.Column(
+        db.Integer,
+        db.ForeignKey('assessment_session.id'),
+        nullable=True
+    )
+    question_id = db.Column(db.Integer, db.ForeignKey('question.id'))
+    skill_tag = db.Column(db.String(20))
+    difficulty = db.Column(db.String(10))
+    is_correct = db.Column(db.Boolean)
+    response_time_sec = db.Column(db.Float)
+    reread_count = db.Column(db.Integer, default=0)
+    mastery_before = db.Column(db.Float)
+    mastery_after = db.Column(db.Float)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class StudentSkillState(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'))
+    skill_tag = db.Column(db.String(20))
+    mastery = db.Column(db.Float, default=0.50)
+    points = db.Column(db.Integer, default=0)
+
+class AssessmentSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(
+        db.Integer,
+        db.ForeignKey('student.id'),
+        nullable=False
+    )
+    started_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow
+    )
+    completed_at = db.Column(db.DateTime, nullable=True)
+    question_count = db.Column(db.Integer, default=0)
+
+
+# with app.app_context():
+#     db.create_all()
 with app.app_context():
     db.create_all()
-    load_models()
+    print("DATABASE URI:", app.config["SQLALCHEMY_DATABASE_URI"])
+    print("DATABASE ENGINE URL:", db.engine.url)
+    print("DATABASE FILE:", db.engine.url.database)
 
 
 # =====================================
-# HEALTH CHECK + SERVE FRONTEND
+# GAMIFICATION CONSTANTS (Phase 5 will expand on this, not replace it)
+# =====================================
+POINTS_CORRECT = 10
+POINTS_BAND_UP = 25
+BAND_RANK = {"Weak": 0, "Developing": 1, "Strong": 2}
+
+
+# =====================================
+# SERVE FRONTEND
 # =====================================
 @app.route("/")
 def home():
-    return send_file('../frontend/dashboard.html')
+    return send_file(BASE_DIR.parent / "frontend" / "login.html")
+
+
+@app.route("/login")
+def login_page():
+    return send_file(BASE_DIR.parent / "frontend" / "login.html")
+
+
+@app.route("/dashboard")
+def dashboard_page():
+    return send_file(BASE_DIR.parent / "frontend" / "dashboard.html")
+
 
 @app.route("/library")
 def library():
-    return send_file('../frontend/library.html')
+    return send_file(BASE_DIR.parent / "frontend" / "library.html")
+
 
 @app.route("/progress")
-def progress():
-    return send_file('../frontend/progress.html')
+def progress_page():
+    return send_file(BASE_DIR.parent / "frontend" / "progress.html")
 
+@app.route("/register")
+def register_page():
+    return send_file(BASE_DIR.parent / "frontend" / "registration.html")
 
 
 # =====================================
-# REGISTER USER
+# AUTH
 # =====================================
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.json
+    data = request.json or {}
 
-    if not data.get("name") or not data.get("grade"):
-        return jsonify({"error": "Missing name or grade"}), 400
+    print("=== REGISTER DEBUG ===")
+    print("DB URL:", db.engine.url)
+    print("DB FILE:", db.engine.url.database)
+    print("INSTANCE:", app.instance_path)
+    print("REQUEST DATA:", data)
 
-    user = User(
-        name=data['name'],
-        grade=data['grade']
+    username = data.get("username", "").strip()
+    student_number = data.get("student_number", "").strip()
+    email = data.get("email", "").strip()
+    grade = data.get("grade")
+    password = data.get("password", "")
+
+    if not username or not student_number or grade is None or not password:
+        return jsonify({
+            "error": "Missing required registration fields"
+        }), 400
+
+    if Student.query.filter_by(username=username).first():
+        return jsonify({"error": "username_already_exists"}), 409
+
+    if Student.query.filter_by(student_number=student_number).first():
+        return jsonify({"error": "student_number_already_exists"}), 409
+
+    if Student.query.filter_by(email=email).first():
+        return jsonify({"error": "email_already_exists"}), 409
+
+    student = Student(
+        username=username,
+        student_number=student_number,
+        email=email or None,
+        grade=int(grade),
+        password_hash=generate_password_hash(password)
     )
 
-    db.session.add(user)
-    db.session.commit()
+    db.session.add(student)
 
-    return jsonify({"user_id": user.id})
-
-
-# =====================================
-# GET PASSAGE DIFFICULTY (SIMPLE LOGIC)
-# =====================================
-@app.route('/api/passage/<int:grade>', methods=['GET'])
-def get_passage(grade):
-
-    if grade <= 5:
-        difficulty = 0
-    elif grade <= 8:
-        difficulty = 1
-    else:
-        difficulty = 2
-
-    return jsonify({
-        "difficulty": difficulty
-    })
-
-
-# =====================================
-# ML PREDICTION (RF + SVM ENSEMBLE)
-# =====================================
-@app.route('/api/predict', methods=['POST'])
-def predict():
-    global rf_model, svm_model
-
-    if rf_model is None or svm_model is None:
-        return jsonify({"error": "Models not loaded"}), 500
-
-    data = request.json
+    print("ABOUT TO COMMIT")
+    print("DB URL:", db.engine.url)
+    print("DB FILE:", db.engine.url.database)
 
     try:
-        features = np.array([[
-            data['lit_acc'],
-            data['inf_acc'],
-            data['voc_acc'],
-            data['mid_acc'],
-            data['overall'],
-            data['time_f'],
-            data['diff']
-        ]])
-    except KeyError as e:
-        return jsonify({"error": f"Missing field {str(e)}"}), 400
-
-    # Model predictions
-    rf_prob = rf_model.predict_proba(features)[0]
-    svm_prob = svm_model.predict_proba(features)[0]
-
-    # Ensemble (average)
-    combined = (rf_prob + svm_prob) / 2
-    band = int(np.argmax(combined))
-
-    # Convert to Lexile
-    lexile_base = [300, 500, 700, 860, 1100, 1300]
-    offset = int((data['overall'] - 0.5) * 100)
-    lexile = max(100, min(1400, lexile_base[band] + offset))
+        db.session.commit()
+        print("COMMIT SUCCESS")
+    except Exception as e:
+        print("COMMIT ERROR:", repr(e))
+        db.session.rollback()
+        raise
 
     return jsonify({
-        "band": band,
-        "lexile": lexile,
-        "confidence": float(np.max(combined))
+        "message": "registration_successful",
+        "student_id": student.id
+    }), 201
+
+
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json or {}
+
+    identifier = data.get("email") or data.get("username") or data.get("student_number")
+    password = data.get("password", "")
+
+    student = Student.query.filter(
+        or_(
+            Student.email == identifier,
+            Student.student_number == identifier,
+            Student.username == identifier
+        )
+    ).first()
+
+    if not student:
+        return jsonify({"error": "student_not_found"}), 404
+
+    if (
+        not student.password_hash
+        or not check_password_hash(student.password_hash, password)
+    ):
+        return jsonify({"error": "invalid credentials"}), 401
+
+    return jsonify({
+        "student_id": student.id,
+        "name": student.username,
+        "grade": student.grade
     })
 
-
 # =====================================
-# SAVE ATTEMPT (DATA COLLECTION CORE)
+# SESSION START -- ensures skill states exist (idempotent, safe to call every login)
 # =====================================
-@app.route('/api/submit', methods=['POST'])
-def submit():
-    data = request.json
+@app.route('/api/session/start', methods=['POST'])
+def session_start():
+    data = request.json or {}
+    student_id = data.get("student_id")
 
-    required_fields = [
-        'user_id','lit_acc','inf_acc','voc_acc',
-        'mid_acc','overall','time_f','diff','lexile','band'
-    ]
+    student = Student.query.get(student_id)
+    if not student:
+        return jsonify({"error": "student not found"}), 404
 
-    for field in required_fields:
-        if field not in data:
-            return jsonify({"error": f"Missing {field}"}), 400
+    # Make sure all skill states exist.
+    existing = {
+        s.skill_tag
+        for s in StudentSkillState.query.filter_by(
+            student_id=student_id
+        ).all()
+    }
 
-    attempt = Attempt(
-        user_id=data['user_id'],
-        lit_acc=data['lit_acc'],
-        inf_acc=data['inf_acc'],
-        voc_acc=data['voc_acc'],
-        mid_acc=data['mid_acc'],
-        overall=data['overall'],
-        time_f=data['time_f'],
-        diff=data['diff'],
-        lexile=data['lexile'],
-        band=data['band']
+    for skill in SKILLS:
+        if skill not in existing:
+            db.session.add(
+                StudentSkillState(
+                    student_id=student_id,
+                    skill_tag=skill
+                )
+            )
+
+    # Create a NEW assessment session.
+    assessment = AssessmentSession(
+        student_id=student_id,
+        question_count=0
     )
 
-    db.session.add(attempt)
+    db.session.add(assessment)
     db.session.commit()
 
-    return jsonify({"message": "saved"})
-
-
-# =====================================
-# EXPORT DATASET TO CSV
-# =====================================
-@app.route('/api/export', methods=['GET'])
-def export_csv():
-    attempts = Attempt.query.all()
-
-    with open("dataset.csv", "w", newline="") as f:
-        writer = csv.writer(f)
-
-        writer.writerow([
-            "lit_acc","inf_acc","voc_acc","mid_acc",
-            "overall","time_f","diff","label"
-        ])
-
-        for a in attempts:
-            writer.writerow([
-                a.lit_acc,
-                a.inf_acc,
-                a.voc_acc,
-                a.mid_acc,
-                a.overall,
-                a.time_f,
-                a.diff,
-                a.band
-            ])
-
     return jsonify({
-        "message": "dataset.csv generated",
-        "rows": len(attempts)
+        "student_id": int(student_id),
+        "session_id": assessment.id,
+        "question_limit": 5,
+        "ready": True
     })
 
 
 # =====================================
-# GET USER HISTORY
+# ENGINE HELPERS -- bridge DB rows <-> mastery.py's plain SkillState dataclass
 # =====================================
-@app.route('/api/history/<int:user_id>', methods=['GET'])
-def history(user_id):
-    attempts = Attempt.query.filter_by(user_id=user_id).all()
+def _load_states(student_id):
+    """Build {skill_tag: SkillState} from DB rows for sequencing.py to consume."""
+    states = {}
+    for row in StudentSkillState.query.filter_by(student_id=student_id).all():
+        attempts = Response.query.filter_by(student_id=student_id, skill_tag=row.skill_tag).count()
+        correct = Response.query.filter_by(student_id=student_id, skill_tag=row.skill_tag, is_correct=True).count()
+        states[row.skill_tag] = SkillState(
+            student_id=student_id,
+            skill_tag=row.skill_tag,
+            mastery=row.mastery,
+            attempts=attempts,
+            correct_count=correct,
+        )
+    return states
 
-    return jsonify([
+
+def _fetch_candidates(skill_tag, difficulty, passage_id=None):
+    query = Question.query.filter_by(
+        skill_tag=skill_tag,
+        difficulty=difficulty
+    )
+
+    if passage_id is not None:
+        query = query.filter_by(passage_id=passage_id)
+
+    return query.all()
+
+@app.route('/api/passages')
+def get_passages():
+    student_id = request.args.get("student_id", type=int)
+
+    if not student_id:
+        return jsonify({
+            "error": "student_id required"
+        }), 400
+
+    student = Student.query.get(student_id)
+
+    if not student:
+        return jsonify({
+            "error": "student not found"
+        }), 404
+
+    passages = Passage.query.order_by(Passage.id).all()
+
+    result = []
+
+    for passage in passages:
+
+        chapter_count = Chapter.query.filter_by(
+            passage_id=passage.id
+        ).count()
+
+        progress = ReadingProgress.query.filter_by(
+            student_id=student_id,
+            passage_id=passage.id
+        ).first()
+
+        completed_chapters = (
+            progress.completed_chapters
+            if progress else 0
+        )
+
+        if chapter_count > 0:
+            progress_percent = round(
+                completed_chapters / chapter_count * 100
+            )
+        else:
+            progress_percent = 0
+
+        if progress_percent == 0:
+            completion_state = "Not Started"
+        elif progress_percent >= 100:
+            completion_state = "Completed"
+        else:
+            completion_state = "In Progress"
+
+        grade_labels = {
+            1: "Grades 3–5",
+            2: "Grades 6–8",
+            3: "Grades 9–12"
+        }
+
+        result.append({
+            "id": passage.id,
+            "title": passage.title,
+            "description": passage.description,
+            "category": passage.category,
+            "grade_band": grade_labels.get(
+                passage.grade_band,
+                "All Grades"
+            ),
+            "chapter_count": chapter_count,
+            "completed_chapters": completed_chapters,
+            "progress_percent": progress_percent,
+            "completion_state": completion_state,
+            "cover_image": passage.cover_image,
+            "is_featured": passage.is_featured
+        })
+
+    return jsonify(result)
+
+@app.route('/api/assessment/passages')
+def assessment_passages():
+    passages = []
+    for passage in Passage.query.order_by(Passage.id).all():
+        questions = []
+        for question in Question.query.filter_by(passage_id=passage.id).order_by(Question.id).all():
+            questions.append({
+                "id": question.id,
+                "type": {
+                    "literal": "literal",
+                    "inferential": "inferential",
+                    "critical": "main_idea",
+                }.get(question.skill_tag, question.skill_tag),
+                "q": question.prompt,
+                "choices": question.choices or [],
+                "correct": question.correct_index,
+                "skill_tag": question.skill_tag,
+                "difficulty": question.difficulty,
+            })
+
+        grade_band = passage.grade_band or 1
+        grades = {1: [3, 4, 5], 2: [6, 7, 8], 3: [9, 10, 11, 12]}.get(grade_band, [grade_band * 3])
+        difficulty = {1: 0, 2: 1, 3: 2}.get(grade_band, 1)
+        word_count = len((passage.body or "").split())
+        read_minutes = f"{max(1, word_count // 120)}-{max(2, word_count // 120 + 1)}"
+
+        passages.append({
+            "id": passage.id,
+            "title": passage.title,
+            "genre": "Reading",
+            "genreEmoji": "📖",
+            "wordCount": max(word_count, 120),
+            "readMinutes": read_minutes,
+            "grades": grades,
+            "difficulty": difficulty,
+            "text": passage.body or "",
+            "questions": questions,
+        })
+
+    return jsonify(passages)
+
+
+# =====================================
+# ADAPTIVE QUESTION SELECTION
+# ONE PASSAGE AT A TIME
+# =====================================
+@app.route('/api/question/next')
+def question_next():
+    student_id = request.args.get("student_id", type=int)
+    session_id = request.args.get("session_id", type=int)
+
+    # -------------------------------------------------
+    # VALIDATE STUDENT
+    # -------------------------------------------------
+    if not student_id or not Student.query.get(student_id):
+        return jsonify({
+            "error": "valid student_id required"
+        }), 400
+
+    # -------------------------------------------------
+    # VALIDATE SESSION
+    # -------------------------------------------------
+    if not session_id:
+        return jsonify({
+            "error": "valid session_id required"
+        }), 400
+
+    assessment = AssessmentSession.query.filter_by(
+        id=session_id,
+        student_id=student_id
+    ).first()
+
+    if not assessment:
+        return jsonify({
+            "error": "assessment session not found"
+        }), 404
+
+    # -------------------------------------------------
+    # HARD LIMIT: 5 QUESTIONS PER ASSESSMENT
+    # -------------------------------------------------
+    if assessment.question_count >= 5:
+        if not assessment.completed_at:
+            assessment.completed_at = datetime.utcnow()
+            db.session.commit()
+
+        return jsonify({
+            "done": True,
+            "message": "Assessment complete. You answered 5 questions.",
+            "question_count": assessment.question_count,
+            "question_limit": 5
+        })
+
+    # -------------------------------------------------
+    # LOAD CURRENT MASTERY STATES
+    # -------------------------------------------------
+    states = _load_states(student_id)
+
+    if not states:
+        return jsonify({
+            "error": "skill states not initialized — call /api/session/start first"
+        }), 400
+
+    # -------------------------------------------------
+    # QUESTIONS ALREADY ANSWERED IN THIS ASSESSMENT
+    # -------------------------------------------------
+    answered_ids = [
+        r.question_id
+        for r in Response.query.filter_by(
+            student_id=student_id,
+            session_id=session_id
+        ).all()
+    ]
+
+    answered_set = set(answered_ids)
+
+    # -------------------------------------------------
+    # DETERMINE CURRENT PASSAGE
+    #
+    # We do not need a new database column.
+    # The current passage is determined from the most
+    # recently answered question in this assessment.
+    #
+    # If there are no responses yet, this is the first
+    # question and therefore there is no current passage.
+    # -------------------------------------------------
+    latest_response = (
+        Response.query
+        .filter_by(
+            student_id=student_id,
+            session_id=session_id
+        )
+        .order_by(Response.id.desc())
+        .first()
+    )
+
+    current_passage_id = None
+
+    if latest_response:
+        latest_question = Question.query.get(
+            latest_response.question_id
+        )
+
+        if latest_question:
+            current_passage_id = latest_question.passage_id
+
+    # -------------------------------------------------
+    # FUNCTION USED BY THE ADAPTIVE ENGINE
+    #
+    # If current_passage_id exists, adaptive selection
+    # is restricted to that passage.
+    # -------------------------------------------------
+    if current_passage_id is not None:
+
+        def fetch_current_passage(skill_tag, difficulty):
+            return _fetch_candidates(
+                skill_tag,
+                difficulty,
+                current_passage_id
+            )
+
+        # -------------------------------------------------
+        # TRY ADAPTIVE SELECTION WITHIN CURRENT PASSAGE
+        # -------------------------------------------------
+        question, skill_tag, difficulty = pick_next_question(
+            states,
+            fetch_current_passage,
+            answered_ids
+        )
+
+        # -------------------------------------------------
+        # FALLBACK 1:
+        # RELAX DIFFICULTY BUT STAY IN SAME PASSAGE
+        # -------------------------------------------------
+        if question is None:
+
+            tried = {difficulty}
+            relaxed = relax_difficulty(difficulty)
+
+            while (
+                question is None
+                and relaxed
+                and relaxed not in tried
+            ):
+                tried.add(relaxed)
+
+                candidates = [
+                    q
+                    for q in _fetch_candidates(
+                        skill_tag,
+                        relaxed,
+                        current_passage_id
+                    )
+                    if q.id not in answered_set
+                ]
+
+                if candidates:
+                    question = random.choice(candidates)
+                    difficulty = relaxed
+                else:
+                    relaxed = relax_difficulty(relaxed)
+
+        # -------------------------------------------------
+        # FALLBACK 2:
+        # ANY UNANSWERED QUESTION FROM CURRENT PASSAGE
+        #
+        # IMPORTANT:
+        # We do NOT leave the passage here.
+        # -------------------------------------------------
+        if question is None:
+
+            remaining = (
+                Question.query
+                .filter(
+                    Question.passage_id == current_passage_id,
+                    ~Question.id.in_(answered_ids or [-1])
+                )
+                .all()
+            )
+
+            if remaining:
+                question = random.choice(remaining)
+                skill_tag = question.skill_tag
+                difficulty = question.difficulty
+
+        # -------------------------------------------------
+        # CURRENT PASSAGE IS EXHAUSTED
+        #
+        # Only now are we allowed to select another
+        # passage.
+        # -------------------------------------------------
+        if question is None:
+
+            question, skill_tag, difficulty = pick_next_question(
+                states,
+                _fetch_candidates,
+                answered_ids
+            )
+
+            new_passage = True
+
+            # -------------------------------------------------
+            # FALLBACK 3:
+            # GLOBAL DIFFICULTY RELAXATION
+            # -------------------------------------------------
+            if question is None:
+
+                tried = {difficulty}
+                relaxed = relax_difficulty(difficulty)
+
+                while (
+                    question is None
+                    and relaxed
+                    and relaxed not in tried
+                ):
+                    tried.add(relaxed)
+
+                    candidates = [
+                        q
+                        for q in _fetch_candidates(
+                            skill_tag,
+                            relaxed
+                        )
+                        if q.id not in answered_set
+                    ]
+
+                    if candidates:
+                        question = random.choice(candidates)
+                        difficulty = relaxed
+                    else:
+                        relaxed = relax_difficulty(relaxed)
+
+            # -------------------------------------------------
+            # FALLBACK 4:
+            # ANY UNANSWERED QUESTION FROM ANY PASSAGE
+            # -------------------------------------------------
+            if question is None:
+
+                remaining = (
+                    Question.query
+                    .filter(
+                        ~Question.id.in_(answered_ids or [-1])
+                    )
+                    .all()
+                )
+
+                if remaining:
+                    question = random.choice(remaining)
+                    skill_tag = question.skill_tag
+                    difficulty = question.difficulty
+
+        else:
+            # We found another question in the same passage.
+            new_passage = False
+
+    else:
+        # -------------------------------------------------
+        # FIRST QUESTION OF THE ASSESSMENT
+        #
+        # No passage has been established yet.
+        # The normal adaptive engine chooses the first
+        # question, and that question establishes the
+        # first passage.
+        # -------------------------------------------------
+        question, skill_tag, difficulty = pick_next_question(
+            states,
+            _fetch_candidates,
+            answered_ids
+        )
+
+        new_passage = True
+
+        # -------------------------------------------------
+        # FALLBACK 1:
+        # RELAX DIFFICULTY
+        # -------------------------------------------------
+        if question is None:
+
+            tried = {difficulty}
+            relaxed = relax_difficulty(difficulty)
+
+            while (
+                question is None
+                and relaxed
+                and relaxed not in tried
+            ):
+                tried.add(relaxed)
+
+                candidates = [
+                    q
+                    for q in _fetch_candidates(
+                        skill_tag,
+                        relaxed
+                    )
+                    if q.id not in answered_set
+                ]
+
+                if candidates:
+                    question = random.choice(candidates)
+                    difficulty = relaxed
+                else:
+                    relaxed = relax_difficulty(relaxed)
+
+        # -------------------------------------------------
+        # FALLBACK 2:
+        # ANY UNANSWERED QUESTION
+        # -------------------------------------------------
+        if question is None:
+
+            remaining = (
+                Question.query
+                .filter(
+                    ~Question.id.in_(answered_ids or [-1])
+                )
+                .all()
+            )
+
+            if remaining:
+                question = random.choice(remaining)
+                skill_tag = question.skill_tag
+                difficulty = question.difficulty
+
+    # -------------------------------------------------
+    # NO QUESTION AVAILABLE
+    # -------------------------------------------------
+    if question is None:
+        return jsonify({
+            "done": True,
+            "message": "No unanswered questions remain in the bank.",
+            "question_count": assessment.question_count,
+            "question_limit": 5
+        })
+
+    # -------------------------------------------------
+    # GET PASSAGE FOR SELECTED QUESTION
+    # -------------------------------------------------
+    passage = Passage.query.get(question.passage_id)
+
+    if not passage:
+        return jsonify({
+            "error": "passage not found for selected question"
+        }), 404
+
+    # -------------------------------------------------
+    # DETERMINE WHETHER THIS QUESTION STARTS A NEW
+    # PASSAGE
+    # -------------------------------------------------
+    if current_passage_id is None:
+        new_passage = True
+    elif question.passage_id != current_passage_id:
+        new_passage = True
+    else:
+        new_passage = False
+
+    # -------------------------------------------------
+    # RESPONSE
+    # -------------------------------------------------
+    return jsonify({
+        "question_id": question.id,
+        "prompt": question.prompt,
+        "choices": question.choices or [],
+        "skill_tag": skill_tag,
+        "difficulty": difficulty,
+
+        "question_number": assessment.question_count + 1,
+        "question_limit": 5,
+
+        # Frontend should only replace the displayed
+        # passage when this is True.
+        "new_passage": new_passage,
+
+        "passage": {
+            "id": passage.id,
+            "title": passage.title,
+            "body": passage.body or "",
+        }
+    })
+
+   
+
+
+# =====================================
+# ANSWER SUBMISSION -- logs Response, updates mastery, awards points
+# =====================================
+@app.route('/api/answer', methods=['POST'])
+def answer():
+    data = request.json or {}
+    student_id = data.get("student_id")
+    session_id = data.get("session_id")
+    question_id = data.get("question_id")
+    chosen_index = data.get("chosen_index")
+    response_time_sec = data.get("response_time_sec", 0.0)
+    reread_count = data.get("reread_count", 0)
+
+    assessment = AssessmentSession.query.filter_by(
+    id=session_id,
+    student_id=student_id
+    ).first()
+
+    if not assessment:
+        return jsonify({
+            "error": "assessment session not found"
+        }), 404
+
+    if assessment.question_count >= 5:
+        return jsonify({
+            "error": "assessment already completed"
+        }), 400
+
+    question = Question.query.get(question_id)
+    if not question:
+        return jsonify({"error": "question not found"}), 404
+
+    skill_row = StudentSkillState.query.filter_by(student_id=student_id, skill_tag=question.skill_tag).first()
+    if not skill_row:
+        return jsonify({"error": "skill state not initialized — call /api/session/start first"}), 400
+
+    is_correct = (chosen_index == question.correct_index)
+
+    mastery_before = skill_row.mastery
+    mastery_after = update_mastery(mastery_before, is_correct, question.difficulty)
+    band_before = classify_band(mastery_before)
+    band_after = classify_band(mastery_after)
+
+    points_earned = POINTS_CORRECT if is_correct else 0
+    leveled_up = BAND_RANK[band_after.value] > BAND_RANK[band_before.value]
+    if leveled_up:
+        points_earned += POINTS_BAND_UP
+
+    skill_row.mastery = mastery_after
+    skill_row.points = (skill_row.points or 0) + points_earned
+
+    db.session.add(Response(
+        session_id=session_id,
+        student_id=student_id,
+        question_id=question_id,
+        skill_tag=question.skill_tag,
+        difficulty=question.difficulty,
+        is_correct=is_correct,
+        response_time_sec=response_time_sec,
+        reread_count=reread_count,
+        mastery_before=mastery_before,
+        mastery_after=mastery_after,
+    ))
+
+    assessment.question_count += 1
+
+    if assessment.question_count >= 5:
+        assessment.completed_at = datetime.utcnow()
+
+
+    db.session.commit()
+
+    return jsonify({
+        "is_correct": is_correct,
+        "correct_index": question.correct_index,
+        "mastery_before": round(mastery_before, 3),
+        "mastery_after": round(mastery_after, 3),
+        "band_before": band_before.value,
+        "band_after": band_after.value,
+        "leveled_up": leveled_up,
+        "points_earned": points_earned,
+    })
+
+
+# =====================================
+# PROGRESS / DASHBOARD DATA
+# =====================================
+@app.route('/api/progress/<int:student_id>')
+def progress_api(student_id):
+    student = Student.query.get(student_id)
+    if not student:
+        return jsonify({"error": "student not found"}), 404
+
+    rows = StudentSkillState.query.filter_by(student_id=student_id).all()
+    skills = []
+    total_points = 0
+    for row in rows:
+        band = classify_band(row.mastery)
+        skills.append({
+            "skill_tag": row.skill_tag,
+            "mastery": round(row.mastery, 3),
+            "band": band.value,
+            "next_difficulty": target_difficulty(row.mastery),
+            "points": row.points,
+        })
+        total_points += row.points or 0
+
+    history_rows = (
+        Response.query
+        .filter_by(student_id=student_id)
+        .order_by(Response.timestamp.asc(), Response.id.asc())
+        .all()
+    )
+
+    history = [
         {
-            "lexile": a.lexile,
-            "band": a.band,
-            "date": a.created_at.strftime("%Y-%m-%d %H:%M")
-        } for a in attempts
+            "timestamp": row.timestamp.isoformat(),
+            "skill_tag": row.skill_tag,
+            "mastery_before": round(row.mastery_before, 3),
+            "mastery_after": round(row.mastery_after, 3),
+        }
+        for row in history_rows
+    ]
+
+    return jsonify({
+        "student_id": student_id,
+        "name": student.username,
+        "grade": student.grade,
+        "skills": skills,
+        "total_points": total_points,
+        "badges": [],  # Phase 5 populates this from a real badge-rule table
+        "history": history,
+    })
+
+
+# =====================================
+# EXPORT (Chapter 3.8 evaluation data)
+# =====================================
+@app.route('/api/export')
+def export():
+    rows = Response.query.all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "student_id", "passage_id", "question_id", "skill_tag", "difficulty",
+        "is_correct", "response_time_sec", "reread_count",
+        "mastery_before", "mastery_after", "timestamp",
     ])
+    for r in rows:
+        q = Question.query.get(r.question_id)
+        writer.writerow([
+            r.student_id,
+            q.passage_id if q else "",
+            r.question_id,
+            r.skill_tag,
+            r.difficulty,
+            r.is_correct,
+            r.response_time_sec,
+            r.reread_count,
+            r.mastery_before,
+            r.mastery_after,
+            r.timestamp,
+        ])
+
+    resp = make_response(output.getvalue())
+    resp.headers["Content-Disposition"] = "attachment; filename=garcs_responses.csv"
+    resp.headers["Content-Type"] = "text/csv"
+    return resp
 
 
-# =====================================
-# RUN APP
-# =====================================
+# NOTE: /api/predict and /api/passage/<grade> are intentionally absent.
+# Per the roadmap, they're deprecated from the live MVP path -- the
+# EdNet/ML strand is fully out of scope, so there is nothing left to serve
+# from those routes.
+
+
 if __name__ == "__main__":
     app.run(debug=True)

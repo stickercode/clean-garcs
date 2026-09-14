@@ -12,73 +12,39 @@
 <!-- Tailwind CSS -->
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <script id="tailwind-config">
-        tailwind.config = {
-            darkMode: "class",
-            theme: {
-                extend: {
-                    colors: {
-                        "on-error-container": "#570008",
-                        "tertiary-fixed": "#e9fe90",
-                        "on-primary-container": "#00594e",
-                        "surface-container-highest": "#96ece7",
-                        "primary": "#00675b",
-                        "on-secondary": "#edf3ff",
-                        "secondary-container": "#b3d4ff",
-                        "surface-variant": "#96ece7",
-                        "outline": "#47807d",
-                        "inverse-primary": "#aafeec",
-                        "on-secondary-fixed-variant": "#1c5385",
-                        "on-primary": "#c1fff1",
-                        "on-tertiary-fixed": "#424f00",
-                        "secondary": "#2a5e91",
-                        "surface-container-lowest": "#ffffff",
-                        "secondary-fixed-dim": "#99c7ff",
-                        "inverse-surface": "#001110",
-                        "on-primary-fixed-variant": "#006357",
-                        "on-tertiary-fixed-variant": "#5d6d0d",
-                        "outline-variant": "#7db8b4",
-                        "error-container": "#fb5151",
-                        "surface-tint": "#00675b",
-                        "on-surface": "#003533",
-                        "secondary-fixed": "#b3d4ff",
-                        "on-background": "#003533",
-                        "tertiary-dim": "#475500",
-                        "inverse-on-surface": "#6da7a4",
-                        "surface-container-low": "#bafdf9",
-                        "surface-container": "#adf5f1",
-                        "on-secondary-fixed": "#00365f",
-                        "error-dim": "#9f0519",
-                        "on-error": "#ffefee",
-                        "tertiary": "#526200",
-                        "tertiary-fixed-dim": "#dbef84",
-                        "surface-bright": "#d4fffb",
-                        "surface": "#d4fffb",
-                        "background": "#d4fffb",
-                        "primary-container": "#99ecdb",
-                        "surface-container-high": "#a2f1ec",
-                        "primary-fixed-dim": "#8bdece",
-                        "primary-dim": "#005a4f",
-                        "primary-fixed": "#99ecdb",
-                        "on-tertiary": "#e8fd90",
-                        "secondary-dim": "#1b5284",
-                        "on-primary-fixed": "#00443b",
-                        "on-tertiary-container": "#526200",
-                        "on-surface-variant": "#296462",
-                        "tertiary-container": "#e9fe90",
-                        "error": "#b31b25",
-                        "surface-dim": "#88e4df",
-                        "on-secondary-container": "#0c4a7b"
-                    },
-                    fontFamily: {
-                        "headline": ["Lexend"],
-                        "body": ["Plus Jakarta Sans"],
-                        "label": ["Plus Jakarta Sans"]
-                    },
-                    borderRadius: { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" },
-                },
-            },
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          primary: "var(--primary)",
+          "primary-dim": "var(--primary-dim)",
+          "primary-container": "var(--primary-container)",
+          secondary: "var(--secondary)",
+          "secondary-container": "var(--secondary-container)",
+          tertiary: "var(--tertiary)",
+          "tertiary-container": "var(--tertiary-container)",
+          surface: "var(--surface)",
+          "surface-container": "var(--surface-container)",
+          "surface-container-low": "var(--surface-container-low)",
+          "surface-container-high": "var(--surface-container-high)",
+          "surface-container-highest": "var(--surface-container-highest)",
+          "surface-container-lowest": "var(--surface-container-lowest)",
+          "on-surface": "var(--on-surface)",
+          "on-surface-variant": "var(--on-surface-variant)",
+          outline: "var(--outline)",
+          "outline-variant": "var(--outline-variant)",
+          background: "var(--background)"
+        },
+        fontFamily: {
+          headline: ["var(--font-headline)"],
+          body: ["var(--font-body)"],
+          label: ["var(--font-label)"]
         }
-    </script>
+      }
+    }
+  }
+</script>
 <link rel="stylesheet" href="static/theme.css">
 </head>
 
@@ -91,9 +57,36 @@
 </button>
 <h1 class="text-[#006B5E] dark:text-teal-300 font-['Lexend'] font-extrabold text-xl tracking-tight">Reading Sanctuary</h1>
 </div>
-<div class="w-10 h-10 rounded-full bg-primary-container overflow-hidden ring-2 ring-primary/20">
+<!-- <div class="w-10 h-10 rounded-full bg-primary-container overflow-hidden ring-2 ring-primary/20">
 <img alt="Student Profile" class="w-full h-full object-cover" data-alt="close-up portrait of a friendly diverse teenage student avatar with a soft blurred teal background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcaQYgP0KJ4N2Zn040KFSbA1uLl50eylRX0deumDHkynV7ci0RncTp3ZzWQO5kbV_Shj-uwse325EzDNDJKTB5jHOKpIyweeGRqnpciGpHgBj22oqn-U0GAq29vxmohvsBZFA9tKfT5ev4zbbfTRlv-6H7vX8DAcuqOMZw4wRBtAEskmB2rdprzVyb1Vu0ofpNWwr4D33wQem1NorAblrJSEOHQv2U5Os6nJjI3LG4_1HfZmgmkFm2T7jniA6FAENoe3WdOR8Zq7t4"/>
+</div> -->
+<div class="relative inline-block">
+  <!-- Settings button -->
+  <button
+    id="settingsBtn"
+    class="w-10 h-10 flex items-center justify-center text-[#006B5E] dark:text-teal-400 hover:scale-95 transition-transform duration-200"
+    type="button"
+  >
+    <span class="material-symbols-outlined" data-icon="settings">settings</span>
+  </button>
+
+  <!-- Dropdown (hidden by default) -->
+  <div
+    id="settingsDropdown"
+    class="hidden absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg z-50"
+  >
+    <!-- Logout button inside dropdown -->
+    <button
+      onclick="logout()"
+      class="w-full flex items-center gap-2 px-4 py-2 rounded-full text-red-700 hover:bg-red-50"
+      type="button"
+    >
+      <span class="material-symbols-outlined">logout</span>
+      <span>Log out</span>
+    </button>
+  </div>
 </div>
+
 </header>
 <main class="px-6 space-y-8 max-w-5xl mx-auto">
 <!-- Search Bar -->
@@ -134,77 +127,15 @@
 </section>
 <!-- Browse All Grid -->
 <section>
-<h2 class="font-headline font-bold text-lg text-on-surface mb-6">Browse All Stories</h2>
-<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-<!-- Card 1 -->
-<div class="bg-surface-container-lowest p-4 rounded-lg flex gap-4 hover:bg-surface-bright transition-colors cursor-pointer shadow-sm">
-<div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
-<img alt="Solar Voyage" class="w-full h-full object-cover" data-alt="vibrant futuristic spacecraft traveling near a glowing orange star with purple cosmic nebulae in the background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDg6TtO5sIGdOmhxqkUuocIU7--pA0ue5BZ3oa1hMPKtyu4TV9tE53jpR6bw5ydiguUfLABXRZ3ow_WlBxbDv8sVXMcSSqLWG0t4qrBUE82_Ou7qSRj3DWY0n0V-S8MMfTdLhywy3hMQf_fLkb2aI3hx1YrFQJOtbkQclUONXVKwqmZW87lyc53da66dLfojOsQet5dk7NJdqYbE4f7o8cB2AL7ZFULd-VkZ5vaq8-lZA5IgoSvGf3d-_sfzoCb3bitqDSB7BSbUbJ6"/>
-</div>
-<div class="flex flex-col justify-center">
-<span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">Science</span>
-<h4 class="font-headline font-bold text-on-surface text-base">Solar Voyage</h4>
-<p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-1">A daring crew races against time to harness the power of a dying sun.</p>
-<div class="flex items-center gap-2">
-<span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">900L</span>
-<span class="text-[10px] text-outline flex items-center gap-1">
-<span class="material-symbols-outlined text-xs" data-icon="schedule">schedule</span> 15 min read
-                            </span>
-</div>
-</div>
-</div>
-<!-- Card 2 -->
-<div class="bg-surface-container-lowest p-4 rounded-lg flex gap-4 hover:bg-surface-bright transition-colors cursor-pointer shadow-sm">
-<div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
-<img alt="The Great Wall Secret" class="w-full h-full object-cover" data-alt="ancient chinese architecture at twilight with soft glowing paper lanterns and misty mountains in the distance" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDygjaqV1mB9UAZtW23ox-qp4e4FJKMlMtBpyApqbiclNlTHzO91FTw_OZWZTYdnlOVUpTTUyAK3Mrrxh90GQYdP7tjKV4siPXEzBamkFjqSW1Fr4TdO_xdd0z_5uExWIlDgIfbNEcdvjT72XgbSvQt5wWktKYpPba3v0_9UgO88q9EtPwWvWaoOzOtkJmTyD2iOiBJQ2-rluhxIPWPcqY-3TRcXvNOAQ4itW9oZeDWH3OwaGeScdnjb7vsKVk-6JBhnl5OldFquv1X"/>
-</div>
-<div class="flex flex-col justify-center">
-<span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">History</span>
-<h4 class="font-headline font-bold text-on-surface text-base">The Great Wall Secret</h4>
-<p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-1">Discover the hidden tunnels used by guardians centuries ago.</p>
-<div class="flex items-center gap-2">
-<span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">720L</span>
-<span class="text-[10px] text-outline flex items-center gap-1">
-<span class="material-symbols-outlined text-xs" data-icon="schedule">schedule</span> 12 min read
-                            </span>
-</div>
-</div>
-</div>
-<!-- Card 3 -->
-<div class="bg-surface-container-lowest p-4 rounded-lg flex gap-4 hover:bg-surface-bright transition-colors cursor-pointer shadow-sm">
-<div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
-<img alt="Olympic Whispers" class="w-full h-full object-cover" data-alt="statue of an ancient greek hero under a clear blue sky with white marble columns and olive branches" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBS9_NtiJZmKIb872BpzWlyc0IWNwOCowVr4YRenCVe67It36vfwpJULItrNHOKr3nPh5pDVNQ73vVaPClR3AQdEzBl7ZrlK4-bQ5GAx6F5JoaZu6nIE_42hnjIDP3v7KSier6bv5OOPCdCxPDFMkqgC7c7kegCEU--LqRVhnGwTF6QOTM3pVR6HZfMtiA-oVl9NhFFkpaBpBR7FrgvstLwqSzn1wEKgSMHhEwo99NrieYLGfmKIOvwnZbuyTIXhxxBl-4Yi7_d-ek0"/>
-</div>
-<div class="flex flex-col justify-center">
-<span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">Mythology</span>
-<h4 class="font-headline font-bold text-on-surface text-base">Olympic Whispers</h4>
-<p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-1">What the gods told the mortals during the first great games.</p>
-<div class="flex items-center gap-2">
-<span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">810L</span>
-<span class="text-[10px] text-outline flex items-center gap-1">
-<span class="material-symbols-outlined text-xs" data-icon="schedule">schedule</span> 20 min read
-                            </span>
-</div>
-</div>
-</div>
-<!-- Card 4 -->
-<div class="bg-surface-container-lowest p-4 rounded-lg flex gap-4 hover:bg-surface-bright transition-colors cursor-pointer shadow-sm">
-<div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
-<img alt="Deep Sea Echoes" class="w-full h-full object-cover" data-alt="bioluminescent jellyfish glowing electric blue in deep dark ocean water with floating particles" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAlO_uVwRfiiflIzQnoSjHM24QH4wxOqed4jY9wh4qJ20k41TK2AumI380ZRf18ler7moar6CBJXaXKtNR4oN9BDq-3G1x9lPywVMXMFJvNTRA6wfvBntSWTRad8R_BIQ0Hd9zjQEugNBC8qkhRhtazk48HuAZJVnAZVBSDtj05UM-_dqMS8uOIrj0kU1-2Q1S27BnvR8YnEjMn5WH4Z3m1Ybrjd_R0Nawp33NEO_FeNk1j1iId1_a1bz5TgAVlo85clzBPtktUa_26"/>
-</div>
-<div class="flex flex-col justify-center">
-<span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">Science</span>
-<h4 class="font-headline font-bold text-on-surface text-base">Deep Sea Echoes</h4>
-<p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-1">Listen to the mysterious signals coming from the Mariana Trench.</p>
-<div class="flex items-center gap-2">
-<span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">950L</span>
-<span class="text-[10px] text-outline flex items-center gap-1">
-<span class="material-symbols-outlined text-xs" data-icon="schedule">schedule</span> 18 min read
-                            </span>
-</div>
-</div>
-</div>
-</div>
+    <h2 class="font-headline font-bold text-lg text-on-surface mb-6">
+        Browse All Stories
+    </h2>
+
+    <div
+        id="passageGrid"
+        class="grid grid-cols-1 md:grid-cols-2 gap-6"
+    >
+    </div>
 </section>
 </main>
 <!-- BottomNavBar -->
@@ -222,4 +153,151 @@
 <span class="font-['Lexend'] font-medium text-[12px]">Progress</span>
 </a>
 </nav>
+<script>
+  const settingsBtn = document.getElementById('settingsBtn');
+  const dropdown = document.getElementById('settingsDropdown');
+
+  settingsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('hidden');
+  });
+
+  // Close when clicking anywhere else
+  document.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+  });
+
+  // (Optional) Close after clicking an item
+  dropdown.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+  });
+
+  function logout() {
+    localStorage.removeItem('garcs_student');
+    window.location.href = '/login';
+  }
+
+  async function loadPassages() {
+    try {
+        const student = JSON.parse(
+            localStorage.getItem("garcs_student") || "{}"
+        );
+
+        const studentId = student.student_id;
+
+        if (!studentId) {
+            throw new Error("Student ID not found");
+        }
+
+        const response = await fetch(
+            `/api/passages?student_id=${encodeURIComponent(studentId)}`
+        );
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+
+            throw new Error(
+                errorData.error || `Failed to load passages (${response.status})`
+            );
+        }
+
+        const passages = await response.json();
+
+        renderPassages(passages);
+
+    } catch (error) {
+        console.error("Error loading passages:", error);
+
+        document.getElementById("passageGrid").innerHTML = `
+            <p class="text-red-600">
+                Unable to load the library.
+            </p>
+        `;
+    }
+}
+
+  function renderPassages(passages) {
+    const grid = document.getElementById("passageGrid");
+
+    grid.innerHTML = "";
+
+    passages.forEach(passage => {
+        const card = document.createElement("div");
+
+        card.className =
+            "bg-surface-container-lowest p-4 rounded-lg " +
+            "flex gap-4 hover:bg-surface-bright transition-colors " +
+            "cursor-pointer shadow-sm";
+
+        card.innerHTML = `
+            <div class="w-24 h-32 rounded-md overflow-hidden flex-none shadow-md">
+                <img
+                    src="${passage.cover_image || '/static/images/default-book.jpg'}"
+                    alt="${passage.title}"
+                    class="w-full h-full object-cover"
+                >
+            </div>
+
+            <div class="flex flex-col justify-center flex-1">
+
+                <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1">
+                    ${passage.category || "Reading"}
+                </span>
+
+                <h4 class="font-headline font-bold text-on-surface text-base">
+                    ${passage.title}
+                </h4>
+
+                <p class="text-on-surface-variant font-body text-xs mt-1 mb-3 line-clamp-2">
+                    ${passage.description || ""}
+                </p>
+
+                <div class="flex items-center gap-2 flex-wrap">
+
+                    <span class="px-2 py-0.5 bg-surface-container text-on-primary-container text-[10px] font-bold rounded-full">
+                        ${passage.grade_band}
+                    </span>
+
+                    <span class="text-[10px] text-outline">
+                        ${passage.chapter_count} chapters
+                    </span>
+
+                </div>
+
+                <div class="mt-3">
+
+                    <div class="flex justify-between text-[10px] mb-1">
+                        <span class="text-outline">
+                            ${passage.completion_state}
+                        </span>
+
+                        <span class="font-bold">
+                            ${passage.progress_percent}%
+                        </span>
+                    </div>
+
+                    <div class="w-full h-2 bg-surface-container rounded-full overflow-hidden">
+                        <div
+                            class="h-full bg-primary rounded-full"
+                            style="width: ${passage.progress_percent}%"
+                        ></div>
+                    </div>
+
+                </div>
+
+            </div>
+        `;
+
+        card.addEventListener("click", () => {
+            window.location.href =
+                `/reading.html?passage_id=${passage.id}`;
+        });
+
+        grid.appendChild(card);
+    });
+}
+
+  // Load passages when the page is ready
+  document.addEventListener("DOMContentLoaded", loadPassages);
+</script>
 </body></html>

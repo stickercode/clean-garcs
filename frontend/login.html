@@ -9,71 +9,39 @@
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script id="tailwind-config">
-      tailwind.config = {
-        darkMode: "class",
-        theme: {
-          extend: {
-            colors: {
-              "on-secondary-fixed-variant": "#1c5385",
-              "surface-variant": "#96ece7",
-              "surface-container": "#adf5f1",
-              "on-primary-fixed": "#00443b",
-              "on-secondary-fixed": "#00365f",
-              "primary-dim": "#005a4f",
-              "on-tertiary-container": "#526200",
-              "on-secondary-container": "#0c4a7b",
-              "secondary-fixed": "#b3d4ff",
-              "error-container": "#fb5151",
-              "primary-fixed": "#99ecdb",
-              "surface-container-high": "#a2f1ec",
-              "on-secondary": "#edf3ff",
-              "primary-container": "#99ecdb",
-              "outline-variant": "#7db8b4",
-              "primary": "#00675b",
-              "primary-fixed-dim": "#8bdece",
-              "surface-tint": "#00675b",
-              "surface-container-low": "#bafdf9",
-              "tertiary-fixed": "#e9fe90",
-              "tertiary-dim": "#475500",
-              "surface-container-highest": "#96ece7",
-              "outline": "#47807d",
-              "surface-bright": "#d4fffb",
-              "on-error-container": "#570008",
-              "tertiary-container": "#e9fe90",
-              "secondary-container": "#b3d4ff",
-              "on-tertiary": "#e8fd90",
-              "secondary-fixed-dim": "#99c7ff",
-              "on-tertiary-fixed": "#424f00",
-              "inverse-surface": "#001110",
-              "secondary-dim": "#1b5284",
-              "surface-container-lowest": "#ffffff",
-              "inverse-on-surface": "#6da7a4",
-              "error-dim": "#9f0519",
-              "on-error": "#ffefee",
-              "on-background": "#003533",
-              "on-surface": "#003533",
-              "error": "#b31b25",
-              "on-tertiary-fixed-variant": "#5d6d0d",
-              "inverse-primary": "#aafeec",
-              "on-primary": "#c1fff1",
-              "secondary": "#2a5e91",
-              "on-surface-variant": "#296462",
-              "background": "#d4fffb",
-              "surface": "#d4fffb",
-              "on-primary-fixed-variant": "#006357",
-              "on-primary-container": "#00594e",
-              "tertiary-fixed-dim": "#dbef84"
-            },
-            fontFamily: {
-              "headline": ["Lexend"],
-              "body": ["Plus Jakarta Sans"],
-              "label": ["Plus Jakarta Sans"]
-            },
-            borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
-          },
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          primary: "var(--primary)",
+          "primary-dim": "var(--primary-dim)",
+          "primary-container": "var(--primary-container)",
+          secondary: "var(--secondary)",
+          "secondary-container": "var(--secondary-container)",
+          tertiary: "var(--tertiary)",
+          "tertiary-container": "var(--tertiary-container)",
+          surface: "var(--surface)",
+          "surface-container": "var(--surface-container)",
+          "surface-container-low": "var(--surface-container-low)",
+          "surface-container-high": "var(--surface-container-high)",
+          "surface-container-highest": "var(--surface-container-highest)",
+          "surface-container-lowest": "var(--surface-container-lowest)",
+          "on-surface": "var(--on-surface)",
+          "on-surface-variant": "var(--on-surface-variant)",
+          outline: "var(--outline)",
+          "outline-variant": "var(--outline-variant)",
+          background: "var(--background)"
         },
+        fontFamily: {
+          headline: ["var(--font-headline)"],
+          body: ["var(--font-body)"],
+          label: ["var(--font-label)"]
+        }
       }
-    </script>
+    }
+  }
+</script>
 <link rel="stylesheet" href="static/theme.css">
 </head>
 <body class="bg-background text-on-background min-h-screen flex items-center justify-center p-4 md:p-8">
@@ -150,8 +118,8 @@
 <div class="relative">
 <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline text-xl" data-icon="lock">lock</span>
 <input class="w-full bg-surface-container-lowest border-2 border-surface-container-high rounded-lg py-4 pl-12 pr-4 focus:ring-0 focus:border-primary/40 focus:bg-surface-bright transition-colors placeholder:text-outline-variant/60" id="password" placeholder="••••••••" type="password"/>
-<button class="absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant hover:text-primary transition-colors" type="button">
-<span class="material-symbols-outlined" data-icon="visibility">visibility</span>
+<button class="absolute inset-y-0 right-0 pr-4 flex items-center text-outline hover:text-primary transition-colors" onclick="togglePassword('password', 'visibility_icon_1')" type="button">
+<span class="material-symbols-outlined" id="visibility_icon_1">visibility</span>
 </button>
 </div>
 </div>
@@ -160,15 +128,7 @@
                         <span class="material-symbols-outlined text-lg" data-icon="rocket_launch">rocket_launch</span>
 </button>
 </form>
-<div class="relative my-8">
-<div class="absolute inset-0 flex items-center">
-<div class="w-full border-t border-surface-container-high"></div>
-</div>
-<div class="relative flex justify-center text-xs">
-<span class="px-4 bg-surface-container-lowest text-outline-variant font-bold tracking-widest uppercase">Or journey with</span>
-</div>
-</div>
-<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<!-- <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 <button class="flex items-center justify-center gap-3 py-3 px-4 bg-surface-container-low hover:bg-surface-container-high text-on-surface text-sm font-bold rounded-lg transition-colors border border-outline-variant/10">
 <img alt="Google" class="w-5 h-5" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCMLwH2Aq4hLJ0qdbMV9qQhIxhiXGXSWmrJZOSMPLc5Mi-54rhy9ZsHn_Bmn_OBoPE9eeOc7tTP4_sMm3LCfLphckaMmp3pxgRSMmo0JE8sC8PQXczCbHv-zZMCsB6GN0IpoGgWDxRef-Dexc-djf8VSin7m5zmQKC_XCySifSv3mAD2z8JTZE_jPTscKM2PJlevGzZYisZVJX-Qy0zE6aifyyrb4vM4FvNMNeex0VVDYh7o53E0-2dWA5Op0trMNQulXwwcs0mcap3"/>
                         Google
@@ -177,11 +137,11 @@
 <span class="material-symbols-outlined text-on-secondary-container" data-icon="school">school</span>
                         School Account
                     </button>
-</div>
+</div> -->
 <div class="mt-10 text-center">
 <p class="text-on-surface-variant font-medium text-sm">
                         New to Lumina? 
-                        <a class="text-primary font-bold hover:underline ml-1" href="#">Create an explorer account</a>
+                        <a class="text-primary font-bold hover:underline ml-1" href="/register">Create an explorer account</a>
 </p>
 </div>
 </div>
@@ -197,4 +157,107 @@
 <div class="fixed bottom-6 right-6 lg:bottom-10 lg:right-10 pointer-events-none opacity-20">
 <span class="material-symbols-outlined text-[120px] text-primary select-none" data-icon="auto_awesome">auto_awesome</span>
 </div>
+<script>
+  function togglePassword(inputId, iconId) {
+                const input = document.getElementById(inputId);
+                const icon = document.getElementById(iconId);
+                if (input.type === 'password') {
+                input.type = 'text';
+                icon.textContent = 'visibility_off';
+                } else {
+                input.type = 'password';
+                icon.textContent = 'visibility';
+                }
+        }
+
+  const form = document.querySelector('form');
+  const identifierInput = document.getElementById('identifier');
+  const passwordInput = document.getElementById('password');
+
+  const savedStudent = localStorage.getItem('garcs_student');
+  if (savedStudent) {
+    try {
+      const parsed = JSON.parse(savedStudent);
+      if (parsed?.student_id) {
+        window.location.href = '/dashboard';
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  if (form) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const email = identifierInput?.value.trim();
+      const password = passwordInput?.value;
+
+      if (!email || !password) {
+        alert('Please enter both your email and password.');
+        return;
+      }
+
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.innerHTML = 'Signing in…';
+      }
+
+      try {
+        let response = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+
+        let payload = await response.json();
+
+        // if student does not exist throw login fail error
+        if (response.status === 404) {
+          throw new Error('Student not found. Please check your credentials or create an account.');
+        }
+
+        if (!response.ok) {
+          throw new Error(payload.error || 'Login failed');
+        }
+
+        localStorage.setItem('garcs_student', JSON.stringify(payload));
+        window.location.href = '/dashboard';
+
+          const registerPayload = await registerResponse.json();
+
+          if (!registerResponse.ok) {
+              throw new Error(
+                  registerPayload.error || 'Unable to create your account'
+              );
+          }
+
+          // Log in again after successful registration
+          response = await fetch('/api/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, password })
+          });
+
+          payload = await response.json();
+        
+
+
+        localStorage.setItem('garcs_student', JSON.stringify(payload));
+        window.location.href = '/dashboard';
+
+    } catch (error) {
+        console.error(error);
+        alert(error.message || 'Unable to sign in right now.');
+
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.innerHTML =
+                'Launch Library <span class="material-symbols-outlined text-lg" data-icon="rocket_launch">rocket_launch</span>';
+        }
+    }
+    });
+  }
+</script>
 </body></html>
