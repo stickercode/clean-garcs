@@ -5,6 +5,39 @@
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>Cognitive Sanctuary – Lexile Predictor</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          primary: "var(--primary, #00675b)",
+          "primary-dim": "var(--primary-dim, #005a4f)",
+          "primary-container": "var(--primary-container, #99ecdb)",
+          secondary: "var(--secondary, #2a5e91)",
+          "secondary-container": "var(--secondary-container, #b3d4ff)",
+          tertiary: "var(--tertiary, #526200)",
+          "tertiary-container": "var(--tertiary-container, #e9fe90)",
+          surface: "var(--surface, #d4fffb)",
+          "surface-container": "var(--surface-container, #adf5f1)",
+          "surface-container-low": "var(--surface-container-low, #bafdf9)",
+          "surface-container-high": "var(--surface-container-high, #a2f1ec)",
+          "surface-container-highest": "var(--surface-container-highest, #96ece7)",
+          "surface-container-lowest": "var(--surface-container-lowest, #ffffff)",
+          "on-surface": "var(--on-surface, #003533)",
+          "on-surface-variant": "var(--on-surface-variant, #296462)",
+          outline: "var(--outline, #47807d)",
+          "outline-variant": "var(--outline-variant, #7db8b4)",
+          background: "var(--background, #d4fffb)"
+        },
+        fontFamily: {
+          headline: ["var(--font-headline, 'Lexend')", "sans-serif"],
+          body: ["var(--font-body, 'Plus Jakarta Sans')", "sans-serif"]
+        }
+      }
+    }
+  }
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="static/theme.css">
@@ -48,12 +81,21 @@ function render() {
 
 // ---------- HEADER COMPONENT ----------
 function headerHTML() {
-  return `<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:2rem;">
-    <div style="width:2.5rem;height:2.5rem;border-radius:50%;background:var(--primary-container);display:flex;align-items:center;justify-content:center;">
-      <span class="material-symbols-outlined" style="color:var(--primary);font-size:1.25rem;font-variation-settings:'FILL' 1;">auto_stories</span>
+  return `<header class="flex items-center justify-between gap-3 mb-6">
+    <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+      <a href="dashboard.html" id="btn-back-dashboard" class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-primary hover:bg-surface-container-low rounded-xl transition-colors shrink-0 group" title="Return to Dashboard">
+        <span class="material-symbols-outlined text-xl transition-transform group-hover:-translate-x-1" data-icon="arrow_back">arrow_back</span>
+        <span class="hidden sm:inline">Dashboard</span>
+      </a>
+      <div class="h-6 w-px bg-outline-variant/30 shrink-0"></div>
+      <div class="flex items-center gap-2.5 truncate">
+        <div class="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shrink-0 shadow-sm">
+          <span class="material-symbols-outlined text-primary text-lg" style="font-variation-settings:'FILL' 1;" data-icon="auto_stories">auto_stories</span>
+        </div>
+        <span class="font-headline font-bold text-base sm:text-lg text-primary truncate">Cognitive Sanctuary</span>
+      </div>
     </div>
-    <span class="headline" style="font-size:1.25rem;font-weight:800;color:var(--primary);">Cognitive Sanctuary</span>
-  </div>`;
+  </header>`;
 }
 
 // ---------- WELCOME SCREEN ----------
@@ -217,6 +259,7 @@ function renderResults() {
     <div style="display:flex;flex-direction:column;gap:0.75rem;">
       <button class="btn-primary" style="width:100%;" onclick="resetApp()">Start Another Assessment</button>
       <button class="btn-outline" style="width:100%;" onclick="goToLibrary()">Open Library</button>
+      <button class="btn-outline" style="width:100%;" onclick="goToDashboard()">Return to Dashboard</button>
     </div>
   </div>`;
 }
@@ -476,7 +519,7 @@ async function nextQuestion() {
       state.currentQuestion = null;
 
       state.completedMessage =
-        'Assessment complete. You answered 5 questions.';
+        'Assessment complete. You answered 10 questions.';
 
       state.screen = 'results';
 
@@ -526,6 +569,10 @@ function resetApp() {
 
 function goToLibrary() {
   window.location.href = '/library';
+}
+
+function goToDashboard() {
+  window.location.href = '/dashboard';
 }
 
 // ============================================================

@@ -151,8 +151,8 @@ def test_assessment_stops_after_ten_questions(client):
 
     session_id = session_response.get_json()['session_id']
 
-    # Answer five questions
-    for question_number in range(1, 6):
+    # Answer ten questions
+    for question_number in range(1, 11):
 
         question_response = client.get(
             '/api/question/next',
@@ -184,8 +184,8 @@ def test_assessment_stops_after_ten_questions(client):
 
         assert answer_response.status_code == 200
 
-    # A sixth question must not be served
-    sixth_response = client.get(
+    # An eleventh question must not be served
+    eleventh_response = client.get(
         '/api/question/next',
         query_string={
             'student_id': student_id,
@@ -193,9 +193,9 @@ def test_assessment_stops_after_ten_questions(client):
         }
     )
 
-    assert sixth_response.status_code == 200
+    assert eleventh_response.status_code == 200
 
-    result = sixth_response.get_json()
+    result = eleventh_response.get_json()
 
     assert result['done'] is True
     assert result['question_count'] == 10
