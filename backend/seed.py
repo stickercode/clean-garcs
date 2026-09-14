@@ -380,6 +380,67 @@ PASSAGES = [
             },
         ],
     },
+    {
+            "title": "RACE Passage (high1227.txt)",
+            "grade_band": 3,
+            "grade_level_estimate": 11.0,
+            "body": "Cholesterol                          Dr, Arlene Donar, Medical\nWatchers                                     Director SPECIAL PURCHASE\nALERT-JULY 2008\n\"BEST PRODUCT WE VE EVER SEEN\"--THIS REALLY-WORKS--ON SALE NOW\nNeed to ler your cho1esterol ?  We strongly recommend\nCholesterolblockTM, This really works, and how is the best time to buy, because of a special offer for the first 250 customers only for a limited time.\n*Takes cholesterol out of food, no matter what you eat.\n*Clinically demonstrated effective in university and hospital testing,.\n*Lowers cholesterol absorption up to 42% or more.\n*NO SIEDE EFFCTS unlike LiptorR, ZocorR, CrestorR& other commonly prescribed medications safe and effective.\n*Outsells all other brands on Internet every month.\nLIMITED TIME ONLY---Try Cholesterol Watchers free with purchase.",
+            "source": "RACE (Lai et al., 2017) - non-commercial research use only - https://arxiv.org/abs/1704.04683",
+            "questions": [
+                {
+                    "prompt": "If you happen to be the 200thcustomer to buy Cholesterolblock, you will  _  .",
+                    "choices": [
+                        "be able to buy it at a low price",
+                        "be the luckiest one online",
+                        "try it free of charge",
+                        "change your diet"
+                    ],
+                    "correct_index": 0,
+                    "skill_tag": "inferential",
+                    "difficulty": "medium",
+                    "needs_review": True
+                },
+                {
+                    "prompt": "LiptorR, ZocorR,CrestorRare  _  .",
+                    "choices": [
+                        "diseases",
+                        "side effects",
+                        "medicines",
+                        "cholesterol"
+                    ],
+                    "correct_index": 2,
+                    "skill_tag": "inferential",
+                    "difficulty": "medium",
+                    "needs_review": True
+                },
+                {
+                    "prompt": "CholesterolblackTM has the following advantages EXCEPT that  _  .",
+                    "choices": [
+                        "it helps take cholesterol out of whatever food you eat",
+                        "it has been proved useful in hospital testing",
+                        "it helps people absorb at least 42% cholesterol",
+                        "it sells best on Internet every month"
+                    ],
+                    "correct_index": 2,
+                    "skill_tag": "literal",
+                    "difficulty": "medium",
+                    "needs_review": True
+                },
+                {
+                    "prompt": "Where can you most probably read this passage?",
+                    "choices": [
+                        "In a travel guide book.",
+                        "On a university bulletin board.",
+                        "In a health magazine.",
+                        "In a doctor's prescription."
+                    ],
+                    "correct_index": 2,
+                    "skill_tag": "literal",
+                    "difficulty": "medium",
+                    "needs_review": True
+                }
+            ]
+        },
 ]
 
 import os
