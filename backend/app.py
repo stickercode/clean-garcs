@@ -594,18 +594,18 @@ def question_next():
         }), 404
 
     # -------------------------------------------------
-    # HARD LIMIT: 5 QUESTIONS PER ASSESSMENT
+    # HARD LIMIT: 10 QUESTIONS PER ASSESSMENT
     # -------------------------------------------------
-    if assessment.question_count >= 5:
+    if assessment.question_count >= 10:
         if not assessment.completed_at:
             assessment.completed_at = datetime.utcnow()
             db.session.commit()
 
         return jsonify({
             "done": True,
-            "message": "Assessment complete. You answered 5 questions.",
+            "message": "Assessment complete. You answered 10 questions.",
             "question_count": assessment.question_count,
-            "question_limit": 5
+            "question_limit": 10
         })
 
     # -------------------------------------------------
@@ -885,7 +885,7 @@ def question_next():
             "done": True,
             "message": "No unanswered questions remain in the bank.",
             "question_count": assessment.question_count,
-            "question_limit": 5
+            "question_limit": 10
         })
 
     # -------------------------------------------------
@@ -920,7 +920,7 @@ def question_next():
         "difficulty": difficulty,
 
         "question_number": assessment.question_count + 1,
-        "question_limit": 5,
+        "question_limit": 10,
 
         # Frontend should only replace the displayed
         # passage when this is True.
@@ -959,7 +959,7 @@ def answer():
             "error": "assessment session not found"
         }), 404
 
-    if assessment.question_count >= 5:
+    if assessment.question_count >= 10:
         return jsonify({
             "error": "assessment already completed"
         }), 400
@@ -1002,7 +1002,7 @@ def answer():
 
     assessment.question_count += 1
 
-    if assessment.question_count >= 5:
+    if assessment.question_count >= 10:
         assessment.completed_at = datetime.utcnow()
 
 
