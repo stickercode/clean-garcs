@@ -21,3 +21,4 @@ backend/instance/database.db
 .env
 .venv/
 .newvenv/
+.env.*

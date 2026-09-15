@@ -87,6 +87,10 @@ from sequencing import pick_next_question, relax_difficulty
 from pathlib import Path
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 BASE_DIR = Path(__file__).resolve().parent
 
 app = Flask(
@@ -116,14 +120,14 @@ DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
 # Local development:
 #   SQLite is used when DATABASE_URL is not set.
 #
-# Production:
+# Production / Supabase:
 #   PostgreSQL is used when DATABASE_URL is set.
 # -------------------------------------------------
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
-    # Some hosting providers still return postgres://
+    # Some hosting providers return postgres://
     # SQLAlchemy expects postgresql://
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace(
@@ -133,11 +137,14 @@ if DATABASE_URL:
         )
 
     app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+    print("DATABASE MODE: PostgreSQL")
 
 else:
     app.config["SQLALCHEMY_DATABASE_URI"] = (
         f"sqlite:///{DATABASE_FILE}"
     )
+    print("DATABASE MODE: SQLite")
+
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -145,6 +152,14 @@ db = SQLAlchemy(app)
 
 CORS(app)
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL:
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+    print("DATABASE MODE: PostgreSQL")
+else:
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///instance/database.db"
+    print("DATABASE MODE: SQLite")
 
 # =====================================
 # DATABASE MODELS  (Chapter 3.6.4 schema — unchanged from Phase 1)
