@@ -62,8 +62,7 @@ DESIGN DECISIONS WORTH KNOWING ABOUT
 
 import csv
 import io
-# from operator import or_
-from sqlalchemy import inspect, or_, text
+from sqlalchemy import or_, func, distinct, and_, case
 
 import random
 from datetime import datetime
@@ -86,6 +85,7 @@ from sequencing import pick_next_question, relax_difficulty
 # APP SETUP
 # =====================================
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -96,18 +96,52 @@ app = Flask(
     instance_path=str(BASE_DIR / "instance"),
     instance_relative_config=True,
 )
+
+
+
+# DATABASE_FILE = Path(app.instance_path) / "database.db"
+# DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+# app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE_FILE}"
+
+# db = SQLAlchemy(app)
+
 DATABASE_FILE = Path(app.instance_path) / "database.db"
 DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATABASE_FILE}"
+
+# -------------------------------------------------
+# DATABASE CONFIGURATION
+#
+# Local development:
+#   SQLite is used when DATABASE_URL is not set.
+#
+# Production:
+#   PostgreSQL is used when DATABASE_URL is set.
+# -------------------------------------------------
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Some hosting providers still return postgres://
+    # SQLAlchemy expects postgresql://
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgres://",
+            "postgresql://",
+            1
+        )
+
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+
+else:
+    app.config["SQLALCHEMY_DATABASE_URI"] = (
+        f"sqlite:///{DATABASE_FILE}"
+    )
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
-from pathlib import Path
-
-# print("=" * 60)
-# print("INSTANCE:", app.instance_path)
-# print("DATABASE:", Path(app.instance_path) / "database.db")
-# print("=" * 60)
 
 CORS(app)
 
@@ -258,34 +292,18 @@ class AssessmentSession(db.Model):
     completed_at = db.Column(db.DateTime, nullable=True)
     question_count = db.Column(db.Integer, default=0)
 
+def initialize_database():
+    with app.app_context():
+        db.create_all()
 
-# with app.app_context():
-#     db.create_all()
-with app.app_context():
-    db.create_all()
+    # print("DATABASE URI:", app.config["SQLALCHEMY_DATABASE_URI"])
 
-    progress_columns = {
-        column["name"]
-        for column in inspect(db.engine).get_columns("reading_progress")
-    }
-    progress_column_definitions = {
-        "book_id": "INTEGER",
-        "chapter_id": "INTEGER",
-        "progress_percent": "FLOAT DEFAULT 0",
-        "reading_position": "INTEGER DEFAULT 0",
-        "updated_at": "DATETIME",
-    }
-    with db.engine.begin() as connection:
-        for column_name, column_definition in progress_column_definitions.items():
-            if column_name not in progress_columns:
-                connection.execute(text(
-                    f"ALTER TABLE reading_progress ADD COLUMN "
-                    f"{column_name} {column_definition}"
-                ))
+    if DATABASE_URL:
+        print("DATABASE MODE: PostgreSQL")
+    else:
+        print("DATABASE MODE: SQLite")
+        print("DATABASE FILE:", DATABASE_FILE)
 
-    print("DATABASE URI:", app.config["SQLALCHEMY_DATABASE_URI"])
-    print("DATABASE ENGINE URL:", db.engine.url)
-    print("DATABASE FILE:", db.engine.url.database)
 
 
 # =====================================
@@ -930,40 +948,63 @@ def assessment_passages():
 
 
 # =====================================
-# ADAPTIVE QUESTION SELECTION
+# OPTIMIZED ADAPTIVE QUESTION SELECTION
 # ONE PASSAGE AT A TIME
+#
+# PostgreSQL-optimized version:
+# - avoids per-skill COUNT() queries
+# - filters candidates in SQL
+# - avoids loading large candidate pools unnecessarily
+# - keeps unseen-passage priority
+# - keeps current-passage continuity
+# - keeps weakest-skill targeting
+# - keeps mastery-based difficulty
 # =====================================
-@app.route('/api/question/next')
-# =====================================
-# ADAPTIVE QUESTION SELECTION
-# ONE PASSAGE AT A TIME
-# WITH UNSEEN-PASSAGE PRIORITY
-# =====================================
+
 @app.route('/api/question/next')
 def question_next():
+
     student_id = request.args.get("student_id", type=int)
     session_id = request.args.get("session_id", type=int)
 
     # -------------------------------------------------
-    # VALIDATE STUDENT
+    # VALIDATE INPUT
     # -------------------------------------------------
-    if not student_id or not Student.query.get(student_id):
+
+    if not student_id:
         return jsonify({
             "error": "valid student_id required"
         }), 400
 
-    # -------------------------------------------------
-    # VALIDATE SESSION
-    # -------------------------------------------------
     if not session_id:
         return jsonify({
             "error": "valid session_id required"
         }), 400
 
-    assessment = AssessmentSession.query.filter_by(
-        id=session_id,
-        student_id=student_id
-    ).first()
+    # -------------------------------------------------
+    # LOAD STUDENT
+    # db.session.get() replaces deprecated Query.get()
+    # -------------------------------------------------
+
+    student = db.session.get(Student, student_id)
+
+    if not student:
+        return jsonify({
+            "error": "valid student_id required"
+        }), 400
+
+    # -------------------------------------------------
+    # LOAD ASSESSMENT SESSION
+    # -------------------------------------------------
+
+    assessment = (
+        AssessmentSession.query
+        .filter_by(
+            id=session_id,
+            student_id=student_id
+        )
+        .first()
+    )
 
     if not assessment:
         return jsonify({
@@ -971,13 +1012,18 @@ def question_next():
         }), 404
 
     # -------------------------------------------------
-    # HARD LIMIT: 10 QUESTIONS PER ASSESSMENT
+    # HARD LIMIT
     # -------------------------------------------------
+
     if assessment.question_count >= 10:
 
         if not assessment.completed_at:
             assessment.completed_at = datetime.utcnow()
-            db.session.commit()
+
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
         return jsonify({
             "done": True,
@@ -986,70 +1032,117 @@ def question_next():
             "question_limit": 10
         })
 
-    # -------------------------------------------------
-    # LOAD CURRENT MASTERY STATES
-    # -------------------------------------------------
-    states = _load_states(student_id)
+    # =================================================
+    # LOAD SKILL STATES + PERFORMANCE COUNTS
+    #
+    # OLD VERSION:
+    #   1 query for skill states
+    #   2 queries PER SKILL for attempts/correct
+    #
+    # NEW VERSION:
+    #   1 query for skill states
+    #   1 aggregate query for all response counts
+    # =================================================
 
-    if not states:
+    skill_rows = (
+        StudentSkillState.query
+        .filter_by(student_id=student_id)
+        .all()
+    )
+
+    if not skill_rows:
         return jsonify({
-            "error": "skill states not initialized — call /api/session/start first"
+            "error": (
+                "skill states not initialized — "
+                "call /api/session/start first"
+            )
         }), 400
 
-    # -------------------------------------------------
-    # QUESTIONS ALREADY ANSWERED IN THIS ASSESSMENT
-    #
-    # These are excluded so the same question cannot be
-    # served twice during the current assessment.
-    # -------------------------------------------------
-    answered_ids = [
-        r.question_id
-        for r in Response.query.filter_by(
+    stats_rows = (
+        db.session.query(
+            Response.skill_tag,
+            func.count(Response.id).label("attempts"),
+            func.sum(
+                case(
+                    (Response.is_correct.is_(True), 1),
+                    else_=0
+                )
+            ).label("correct_count")
+        )
+        .filter(Response.student_id == student_id)
+        .group_by(Response.skill_tag)
+        .all()
+    )
+
+    stats_by_skill = {
+        row.skill_tag: {
+            "attempts": int(row.attempts or 0),
+            "correct_count": int(row.correct_count or 0)
+        }
+        for row in stats_rows
+    }
+
+    states = {}
+
+    for row in skill_rows:
+
+        stats = stats_by_skill.get(
+            row.skill_tag,
+            {
+                "attempts": 0,
+                "correct_count": 0
+            }
+        )
+
+        states[row.skill_tag] = SkillState(
             student_id=student_id,
-            session_id=session_id
-        ).all()
+            skill_tag=row.skill_tag,
+            mastery=row.mastery,
+            attempts=stats["attempts"],
+            correct_count=stats["correct_count"],
+        )
+
+    # -------------------------------------------------
+    # QUESTIONS ANSWERED IN THIS ASSESSMENT
+    # -------------------------------------------------
+
+    answered_ids = [
+        row[0]
+        for row in (
+            db.session.query(Response.question_id)
+            .filter(
+                Response.student_id == student_id,
+                Response.session_id == session_id,
+                Response.question_id.isnot(None)
+            )
+            .all()
+        )
     ]
 
     answered_set = set(answered_ids)
 
-    # -------------------------------------------------
-    # FIND PASSAGES THE STUDENT HAS ALREADY ENCOUNTERED
+    # =================================================
+    # PASSAGE ENCOUNTER HISTORY
     #
-    # A passage is considered "encountered" if the student
-    # has answered at least one question belonging to it
-    # in ANY previous assessment.
-    #
-    # This is intentionally NOT limited to the current
-    # session.
-    # -------------------------------------------------
-    seen_passage_rows = (
-        db.session.query(Question.passage_id)
-        .join(
-            Response,
-            Response.question_id == Question.id
-        )
-        .filter(
-            Response.student_id == student_id,
-            Question.passage_id.isnot(None)
-        )
-        .distinct()
-        .all()
-    )
+    # A passage is "seen" if the student has answered
+    # at least one question belonging to that passage
+    # in ANY assessment.
+    # =================================================
 
     seen_passage_ids = {
         row[0]
-        for row in seen_passage_rows
-        if row[0] is not None
-    }
-
-    # -------------------------------------------------
-    # GET ALL PASSAGES THAT HAVE QUESTIONS
-    # -------------------------------------------------
-    all_passage_ids = {
-        row[0]
         for row in (
-            db.session.query(Question.passage_id)
-            .filter(Question.passage_id.isnot(None))
+            db.session.query(
+                Question.passage_id
+            )
+            .join(
+                Response,
+                Response.question_id == Question.id
+            )
+            .filter(
+                Response.student_id == student_id,
+                Question.passage_id.isnot(None)
+            )
             .distinct()
             .all()
         )
@@ -1057,27 +1150,39 @@ def question_next():
     }
 
     # -------------------------------------------------
-    # DETERMINE WHETHER THERE ARE STILL UNSEEN PASSAGES
-    #
-    # If there are unseen passages, they MUST be preferred.
-    #
-    # If every passage has already been encountered, the
-    # passage pool resets and previously seen passages may
-    # be used again.
+    # ALL PASSAGES THAT CONTAIN QUESTIONS
     # -------------------------------------------------
-    unseen_passage_ids = all_passage_ids - seen_passage_ids
 
-    passage_pool_has_unseen = bool(unseen_passage_ids)
+    all_passage_ids = {
+        row[0]
+        for row in (
+            db.session.query(
+                Question.passage_id
+            )
+            .filter(
+                Question.passage_id.isnot(None)
+            )
+            .distinct()
+            .all()
+        )
+        if row[0] is not None
+    }
 
-    # -------------------------------------------------
+    unseen_passage_ids = (
+        all_passage_ids - seen_passage_ids
+    )
+
+    passage_pool_has_unseen = bool(
+        unseen_passage_ids
+    )
+
+    # =================================================
     # CURRENT PASSAGE
     #
-    # The current passage is determined from the most
-    # recently answered question in this assessment.
-    #
-    # This allows the frontend to keep displaying the same
-    # passage while its unanswered questions remain.
-    # -------------------------------------------------
+    # The latest answered question in THIS assessment
+    # determines the current passage.
+    # =================================================
+
     latest_response = (
         Response.query
         .filter_by(
@@ -1091,88 +1196,184 @@ def question_next():
     current_passage_id = None
 
     if latest_response:
-        latest_question = Question.query.get(
+
+        latest_question = db.session.get(
+            Question,
             latest_response.question_id
         )
 
         if latest_question:
-            current_passage_id = latest_question.passage_id
+            current_passage_id = (
+                latest_question.passage_id
+            )
 
-    # -------------------------------------------------
-    # HELPER: FETCH QUESTIONS FOR A SPECIFIC PASSAGE
-    # -------------------------------------------------
-    def fetch_current_passage(skill_tag, difficulty):
-        return _fetch_candidates(
-            skill_tag,
-            difficulty,
-            current_passage_id
+    # =================================================
+    # CANDIDATE QUERY HELPER
+    #
+    # IMPORTANT:
+    # Filtering happens in PostgreSQL instead of:
+    #
+    #     query.all()
+    #     then Python filtering
+    #
+    # This is substantially cheaper with Supabase.
+    # =================================================
+
+    def fetch_candidates(
+        skill_tag,
+        difficulty,
+        passage_id=None,
+        passage_ids=None
+    ):
+
+        query = Question.query.filter(
+            Question.skill_tag == skill_tag,
+            Question.difficulty == difficulty
         )
 
-    # -------------------------------------------------
-    # HELPER: FETCH ONLY QUESTIONS FROM UNSEEN PASSAGES
+        # Current passage restriction
+        if passage_id is not None:
+            query = query.filter(
+                Question.passage_id == passage_id
+            )
+
+        # Passage pool restriction
+        elif passage_ids is not None:
+            if not passage_ids:
+                return []
+
+            query = query.filter(
+                Question.passage_id.in_(passage_ids)
+            )
+
+        # Never repeat a question inside this assessment
+        if answered_ids:
+            query = query.filter(
+                ~Question.id.in_(answered_ids)
+            )
+
+        return query.all()
+
+    # =================================================
+    # ANY UNANSWERED QUESTION HELPER
+    # =================================================
+
+    def fetch_any_unanswered(
+        passage_id=None,
+        passage_ids=None
+    ):
+
+        query = Question.query
+
+        if passage_id is not None:
+            query = query.filter(
+                Question.passage_id == passage_id
+            )
+
+        elif passage_ids is not None:
+
+            if not passage_ids:
+                return None
+
+            query = query.filter(
+                Question.passage_id.in_(passage_ids)
+            )
+
+        if answered_ids:
+            query = query.filter(
+                ~Question.id.in_(answered_ids)
+            )
+
+        # PostgreSQL chooses one random row.
+        #
+        # This avoids loading the entire candidate list
+        # into Python just to call random.choice().
+        question = (
+            query
+            .order_by(func.random())
+            .first()
+        )
+
+        return question
+
+    # =================================================
+    # ADAPTIVE PICK HELPER
     #
-    # This is the important part that prevents the system
-    # from repeatedly selecting the same few passages.
-    # -------------------------------------------------
-    def fetch_unseen_candidates(skill_tag, difficulty):
-        candidates = _fetch_candidates(
+    # Uses the existing sequencing engine so the
+    # adaptive behavior remains consistent.
+    # =================================================
+
+    def adaptive_pick(
+        passage_id=None,
+        passage_ids=None
+    ):
+
+        def candidate_function(
             skill_tag,
             difficulty
+        ):
+            return fetch_candidates(
+                skill_tag=skill_tag,
+                difficulty=difficulty,
+                passage_id=passage_id,
+                passage_ids=passage_ids
+            )
+
+        return pick_next_question(
+            states,
+            candidate_function,
+            answered_ids
         )
 
-        return [
-            q for q in candidates
-            if (
-                q.id not in answered_set
-                and q.passage_id in unseen_passage_ids
+    # =================================================
+    # RELAXED DIFFICULTY PICK
+    # =================================================
+
+    def relaxed_pick(
+        initial_skill,
+        initial_difficulty,
+        passage_id=None,
+        passage_ids=None
+    ):
+
+        if not initial_skill:
+            return None, None, None
+
+        tried = set()
+
+        difficulty = initial_difficulty
+
+        while difficulty and difficulty not in tried:
+
+            tried.add(difficulty)
+
+            candidates = fetch_candidates(
+                skill_tag=initial_skill,
+                difficulty=difficulty,
+                passage_id=passage_id,
+                passage_ids=passage_ids
             )
-        ]
 
-    # -------------------------------------------------
-    # HELPER: FETCH ANY UNANSWERED QUESTION FROM AN
-    # UNSEEN PASSAGE
-    # -------------------------------------------------
-    def fetch_any_unseen_question():
-        if not unseen_passage_ids:
-            return None
+            if candidates:
 
-        candidates = (
-            Question.query
-            .filter(
-                Question.passage_id.in_(unseen_passage_ids),
-                ~Question.id.in_(answered_ids or [-1])
+                question = random.choice(candidates)
+
+                return (
+                    question,
+                    initial_skill,
+                    difficulty
+                )
+
+            difficulty = relax_difficulty(
+                difficulty
             )
-            .all()
-        )
 
-        if candidates:
-            return random.choice(candidates)
+        return None, None, None
 
-        return None
+    # =================================================
+    # QUESTION SELECTION
+    # =================================================
 
-    # -------------------------------------------------
-    # HELPER: FETCH ANY UNANSWERED QUESTION
-    #
-    # Used only after the unseen passage pool has been
-    # exhausted.
-    # -------------------------------------------------
-    def fetch_any_unanswered_question():
-        candidates = (
-            Question.query
-            .filter(
-                ~Question.id.in_(answered_ids or [-1])
-            )
-            .all()
-        )
-
-        if candidates:
-            return random.choice(candidates)
-
-        return None
-
-    # -------------------------------------------------
-    # SELECT QUESTION
-    # -------------------------------------------------
     question = None
     skill_tag = None
     difficulty = None
@@ -1180,339 +1381,192 @@ def question_next():
 
     # =================================================
     # CASE 1:
-    # THERE IS A CURRENT PASSAGE
+    # CURRENT PASSAGE EXISTS
+    #
+    # Stay in the passage until all its unanswered
+    # questions have been exhausted.
     # =================================================
+
     if current_passage_id is not None:
 
         # -------------------------------------------------
-        # FIRST: CONTINUE CURRENT PASSAGE
-        #
-        # IMPORTANT:
-        # Once a passage has started, the student stays
-        # with that passage until there are no unanswered
-        # questions left in it.
+        # FIRST: ADAPTIVE QUESTION IN CURRENT PASSAGE
         # -------------------------------------------------
-        question, skill_tag, difficulty = pick_next_question(
-            states,
-            fetch_current_passage,
-            answered_ids
+
+        question, skill_tag, difficulty = adaptive_pick(
+            passage_id=current_passage_id
         )
 
         # -------------------------------------------------
-        # FALLBACK 1:
-        # RELAX DIFFICULTY BUT STAY IN CURRENT PASSAGE
+        # RELAX DIFFICULTY
         # -------------------------------------------------
+
         if question is None:
 
-            tried = {difficulty}
-            relaxed = relax_difficulty(difficulty)
-
-            while (
-                question is None
-                and relaxed
-                and relaxed not in tried
-            ):
-                tried.add(relaxed)
-
-                candidates = [
-                    q
-                    for q in _fetch_candidates(
-                        skill_tag,
-                        relaxed,
-                        current_passage_id
-                    )
-                    if q.id not in answered_set
-                ]
-
-                if candidates:
-                    question = random.choice(candidates)
-                    difficulty = relaxed
-                else:
-                    relaxed = relax_difficulty(relaxed)
-
-        # -------------------------------------------------
-        # FALLBACK 2:
-        # ANY UNANSWERED QUESTION FROM CURRENT PASSAGE
-        #
-        # We still do NOT leave the passage.
-        # -------------------------------------------------
-        if question is None:
-
-            remaining = (
-                Question.query
-                .filter(
-                    Question.passage_id == current_passage_id,
-                    ~Question.id.in_(answered_ids or [-1])
-                )
-                .all()
+            weakest_skill = min(
+                states.values(),
+                key=lambda state: state.mastery
             )
 
-            if remaining:
-                question = random.choice(remaining)
+            skill_tag = weakest_skill.skill_tag
+            difficulty = target_difficulty(
+                weakest_skill.mastery
+            )
+
+            (
+                question,
+                skill_tag,
+                difficulty
+            ) = relaxed_pick(
+                skill_tag,
+                difficulty,
+                passage_id=current_passage_id
+            )
+
+        # -------------------------------------------------
+        # ANY REMAINING QUESTION IN CURRENT PASSAGE
+        # -------------------------------------------------
+
+        if question is None:
+
+            question = fetch_any_unanswered(
+                passage_id=current_passage_id
+            )
+
+            if question:
+
                 skill_tag = question.skill_tag
                 difficulty = question.difficulty
 
         # -------------------------------------------------
         # CURRENT PASSAGE IS EXHAUSTED
-        #
-        # Only now may the system select another passage.
         # -------------------------------------------------
+
         if question is None:
 
             new_passage = True
 
-            # =============================================
-            # PRIORITY 1:
-            # SELECT FROM AN UNSEEN PASSAGE
-            # =============================================
-            if passage_pool_has_unseen:
-
-                # -----------------------------------------
-                # Adaptive selection:
-                # weakest skill + target difficulty,
-                # but restricted to unseen passages.
-                # -----------------------------------------
-                question, skill_tag, difficulty = pick_next_question(
-                    states,
-                    fetch_unseen_candidates,
-                    answered_ids
-                )
-
-                # -----------------------------------------
-                # FALLBACK 3:
-                # RELAX DIFFICULTY WHILE STAYING WITHIN
-                # UNSEEN PASSAGES
-                # -----------------------------------------
-                if question is None:
-
-                    tried = {difficulty}
-                    relaxed = relax_difficulty(difficulty)
-
-                    while (
-                        question is None
-                        and relaxed
-                        and relaxed not in tried
-                    ):
-                        tried.add(relaxed)
-
-                        candidates = [
-                            q
-                            for q in _fetch_candidates(
-                                skill_tag,
-                                relaxed
-                            )
-                            if (
-                                q.id not in answered_set
-                                and q.passage_id in unseen_passage_ids
-                            )
-                        ]
-
-                        if candidates:
-                            question = random.choice(candidates)
-                            difficulty = relaxed
-                        else:
-                            relaxed = relax_difficulty(relaxed)
-
-                # -----------------------------------------
-                # FALLBACK 4:
-                # ANY UNANSWERED QUESTION FROM AN
-                # UNSEEN PASSAGE
-                # -----------------------------------------
-                if question is None:
-
-                    question = fetch_any_unseen_question()
-
-                    if question:
-                        skill_tag = question.skill_tag
-                        difficulty = question.difficulty
-
-            # =============================================
-            # PRIORITY 2:
-            # ALL PASSAGES HAVE BEEN SEEN
-            #
-            # Reset the passage pool.
-            # Previously encountered passages can now
-            # appear again, but questions already answered
-            # in THIS assessment remain excluded.
-            # =============================================
-            if question is None:
-
-                question, skill_tag, difficulty = pick_next_question(
-                    states,
-                    _fetch_candidates,
-                    answered_ids
-                )
-
-                # -----------------------------------------
-                # FALLBACK 5:
-                # GLOBAL DIFFICULTY RELAXATION
-                # -----------------------------------------
-                if question is None:
-
-                    tried = {difficulty}
-                    relaxed = relax_difficulty(difficulty)
-
-                    while (
-                        question is None
-                        and relaxed
-                        and relaxed not in tried
-                    ):
-                        tried.add(relaxed)
-
-                        candidates = [
-                            q
-                            for q in _fetch_candidates(
-                                skill_tag,
-                                relaxed
-                            )
-                            if q.id not in answered_set
-                        ]
-
-                        if candidates:
-                            question = random.choice(candidates)
-                            difficulty = relaxed
-                        else:
-                            relaxed = relax_difficulty(relaxed)
-
-                # -----------------------------------------
-                # FALLBACK 6:
-                # ANY UNANSWERED QUESTION
-                # -----------------------------------------
-                if question is None:
-
-                    question = fetch_any_unanswered_question()
-
-                    if question:
-                        skill_tag = question.skill_tag
-                        difficulty = question.difficulty
-
     # =================================================
     # CASE 2:
-    # FIRST QUESTION OF THE ASSESSMENT
+    # NEW PASSAGE REQUIRED
     # =================================================
-    else:
 
-        new_passage = True
+    if question is None:
 
         # -------------------------------------------------
         # PRIORITY 1:
-        # IF UNSEEN PASSAGES EXIST, THE FIRST QUESTION
-        # MUST COME FROM AN UNSEEN PASSAGE.
+        # UNSEEN PASSAGES
         # -------------------------------------------------
+
         if passage_pool_has_unseen:
 
-            question, skill_tag, difficulty = pick_next_question(
-                states,
-                fetch_unseen_candidates,
-                answered_ids
+            (
+                question,
+                skill_tag,
+                difficulty
+            ) = adaptive_pick(
+                passage_ids=unseen_passage_ids
             )
 
             # -------------------------------------------------
-            # FALLBACK 1:
-            # RELAX DIFFICULTY WITHIN UNSEEN PASSAGES
+            # RELAX DIFFICULTY IN UNSEEN PASSAGES
             # -------------------------------------------------
+
             if question is None:
 
-                tried = {difficulty}
-                relaxed = relax_difficulty(difficulty)
+                weakest_skill = min(
+                    states.values(),
+                    key=lambda state: state.mastery
+                )
 
-                while (
-                    question is None
-                    and relaxed
-                    and relaxed not in tried
-                ):
-                    tried.add(relaxed)
+                skill_tag = weakest_skill.skill_tag
+                difficulty = target_difficulty(
+                    weakest_skill.mastery
+                )
 
-                    candidates = [
-                        q
-                        for q in _fetch_candidates(
-                            skill_tag,
-                            relaxed
-                        )
-                        if (
-                            q.id not in answered_set
-                            and q.passage_id in unseen_passage_ids
-                        )
-                    ]
-
-                    if candidates:
-                        question = random.choice(candidates)
-                        difficulty = relaxed
-                    else:
-                        relaxed = relax_difficulty(relaxed)
+                (
+                    question,
+                    skill_tag,
+                    difficulty
+                ) = relaxed_pick(
+                    skill_tag,
+                    difficulty,
+                    passage_ids=unseen_passage_ids
+                )
 
             # -------------------------------------------------
-            # FALLBACK 2:
             # ANY QUESTION FROM AN UNSEEN PASSAGE
             # -------------------------------------------------
+
             if question is None:
 
-                question = fetch_any_unseen_question()
+                question = fetch_any_unanswered(
+                    passage_ids=unseen_passage_ids
+                )
 
                 if question:
+
                     skill_tag = question.skill_tag
                     difficulty = question.difficulty
 
         # -------------------------------------------------
         # PRIORITY 2:
-        # ALL PASSAGES HAVE ALREADY BEEN ENCOUNTERED
+        # ALL PASSAGES HAVE BEEN SEEN
         #
-        # Start using the passage pool again.
+        # Reuse passages, but still never repeat a question
+        # within this assessment.
         # -------------------------------------------------
+
         if question is None:
 
-            question, skill_tag, difficulty = pick_next_question(
-                states,
-                _fetch_candidates,
-                answered_ids
-            )
+            (
+                question,
+                skill_tag,
+                difficulty
+            ) = adaptive_pick()
 
             # -------------------------------------------------
-            # FALLBACK 3:
-            # RELAX DIFFICULTY
+            # GLOBAL DIFFICULTY RELAXATION
             # -------------------------------------------------
+
             if question is None:
 
-                tried = {difficulty}
-                relaxed = relax_difficulty(difficulty)
+                weakest_skill = min(
+                    states.values(),
+                    key=lambda state: state.mastery
+                )
 
-                while (
-                    question is None
-                    and relaxed
-                    and relaxed not in tried
-                ):
-                    tried.add(relaxed)
+                skill_tag = weakest_skill.skill_tag
+                difficulty = target_difficulty(
+                    weakest_skill.mastery
+                )
 
-                    candidates = [
-                        q
-                        for q in _fetch_candidates(
-                            skill_tag,
-                            relaxed
-                        )
-                        if q.id not in answered_set
-                    ]
-
-                    if candidates:
-                        question = random.choice(candidates)
-                        difficulty = relaxed
-                    else:
-                        relaxed = relax_difficulty(relaxed)
+                (
+                    question,
+                    skill_tag,
+                    difficulty
+                ) = relaxed_pick(
+                    skill_tag,
+                    difficulty
+                )
 
             # -------------------------------------------------
-            # FALLBACK 4:
             # ANY UNANSWERED QUESTION
             # -------------------------------------------------
+
             if question is None:
 
-                question = fetch_any_unanswered_question()
+                question = fetch_any_unanswered()
 
                 if question:
+
                     skill_tag = question.skill_tag
                     difficulty = question.difficulty
 
     # =================================================
     # NO QUESTION AVAILABLE
     # =================================================
+
     if question is None:
 
         return jsonify({
@@ -1522,42 +1576,56 @@ def question_next():
             "question_limit": 10
         })
 
-    # -------------------------------------------------
-    # GET PASSAGE FOR SELECTED QUESTION
-    # -------------------------------------------------
-    passage = Passage.query.get(question.passage_id)
+    # =================================================
+    # LOAD PASSAGE
+    # =================================================
+
+    passage = db.session.get(
+        Passage,
+        question.passage_id
+    )
 
     if not passage:
+
         return jsonify({
             "error": "passage not found for selected question"
         }), 404
 
-    # -------------------------------------------------
-    # DETERMINE WHETHER THIS QUESTION STARTS A NEW
-    # PASSAGE
-    # -------------------------------------------------
+    # =================================================
+    # DETERMINE WHETHER THIS IS A NEW PASSAGE
+    # =================================================
+
     if current_passage_id is None:
         new_passage = True
+
     elif question.passage_id != current_passage_id:
         new_passage = True
+
     else:
         new_passage = False
 
-    # -------------------------------------------------
+    # =================================================
     # RESPONSE
-    # -------------------------------------------------
+    # =================================================
+
     return jsonify({
+
         "question_id": question.id,
+
         "prompt": question.prompt,
+
         "choices": question.choices or [],
+
         "skill_tag": skill_tag,
+
         "difficulty": difficulty,
 
-        "question_number": assessment.question_count + 1,
+        "question_number": (
+            assessment.question_count + 1
+        ),
+
         "question_limit": 10,
 
-        # Frontend should only replace the displayed
-        # passage when this is True.
         "new_passage": new_passage,
 
         "passage": {
@@ -1567,11 +1635,21 @@ def question_next():
         }
     })
 
+
 # =====================================
-# ANSWER SUBMISSION
-# Logs Response, updates mastery,
-# awards points, and evaluates badges
+# OPTIMIZED ANSWER SUBMISSION
+#
+# Saves:
+# - correctness
+# - mastery
+# - points
+# - response log
+# - assessment count
+#
+# Expensive badge/passages calculations are reduced
+# to small aggregate queries.
 # =====================================
+
 @app.route('/api/answer', methods=['POST'])
 def answer():
 
@@ -1593,60 +1671,83 @@ def answer():
     )
 
     # =================================================
-    # VALIDATE STUDENT
+    # VALIDATION
     # =================================================
+
     if not student_id:
         return jsonify({
             "error": "valid student_id required"
         }), 400
 
-    student = Student.query.get(student_id)
+    if not session_id:
+        return jsonify({
+            "error": "valid session_id required"
+        }), 400
+
+    if question_id is None:
+        return jsonify({
+            "error": "question_id required"
+        }), 400
+
+    # -------------------------------------------------
+    # STUDENT
+    # -------------------------------------------------
+
+    student = db.session.get(
+        Student,
+        int(student_id)
+    )
 
     if not student:
         return jsonify({
             "error": "student not found"
         }), 404
 
-    # =================================================
-    # VALIDATE SESSION
-    # =================================================
-    if not session_id:
-        return jsonify({
-            "error": "valid session_id required"
-        }), 400
+    # -------------------------------------------------
+    # ASSESSMENT
+    # -------------------------------------------------
 
-    assessment = AssessmentSession.query.filter_by(
-        id=session_id,
-        student_id=student_id
-    ).first()
+    assessment = (
+        AssessmentSession.query
+        .filter_by(
+            id=int(session_id),
+            student_id=int(student_id)
+        )
+        .first()
+    )
 
     if not assessment:
         return jsonify({
             "error": "assessment session not found"
         }), 404
 
-    # =================================================
-    # HARD LIMIT: 10 QUESTIONS PER ASSESSMENT
-    # =================================================
+    # -------------------------------------------------
+    # HARD LIMIT
+    # -------------------------------------------------
+
     if assessment.question_count >= 10:
 
         if not assessment.completed_at:
+
             assessment.completed_at = datetime.utcnow()
-            db.session.commit()
+
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
         return jsonify({
             "error": "assessment already completed"
         }), 400
 
-    # =================================================
-    # VALIDATE QUESTION
-    # =================================================
-    if not question_id:
-        return jsonify({
-            "error": "question_id required"
-        }), 400
+    # -------------------------------------------------
+    # QUESTION
+    # -------------------------------------------------
 
-    question = Question.query.get(question_id)
+    question = db.session.get(
+        Question,
+        int(question_id)
+    )
 
     if not question:
         return jsonify({
@@ -1654,8 +1755,9 @@ def answer():
         }), 404
 
     # =================================================
-    # VALIDATE ANSWER INDEX
+    # VALIDATE CHOICE
     # =================================================
+
     if chosen_index is None:
         return jsonify({
             "error": "chosen_index required"
@@ -1663,12 +1765,15 @@ def answer():
 
     try:
         chosen_index = int(chosen_index)
+
     except (TypeError, ValueError):
+
         return jsonify({
             "error": "chosen_index must be an integer"
         }), 400
 
     if not question.choices:
+
         return jsonify({
             "error": "question has no answer choices"
         }), 400
@@ -1677,37 +1782,46 @@ def answer():
         chosen_index < 0
         or chosen_index >= len(question.choices)
     ):
+
         return jsonify({
             "error": "chosen_index is outside the available choices"
         }), 400
 
     # =================================================
-    # PREVENT DUPLICATE ANSWERING
-    #
-    # The frontend should normally never submit the same
-    # question twice, but this protects the database if
-    # the request is accidentally repeated.
+    # PREVENT DUPLICATE ANSWER
     # =================================================
-    existing_response = Response.query.filter_by(
-        student_id=student_id,
-        session_id=session_id,
-        question_id=question_id
-    ).first()
+
+    existing_response = (
+        Response.query
+        .filter_by(
+            student_id=int(student_id),
+            session_id=int(session_id),
+            question_id=int(question_id)
+        )
+        .first()
+    )
 
     if existing_response:
+
         return jsonify({
             "error": "question already answered in this assessment"
         }), 409
 
     # =================================================
-    # GET STUDENT'S SKILL STATE
+    # SKILL STATE
     # =================================================
-    skill_row = StudentSkillState.query.filter_by(
-        student_id=student_id,
-        skill_tag=question.skill_tag
-    ).first()
+
+    skill_row = (
+        StudentSkillState.query
+        .filter_by(
+            student_id=int(student_id),
+            skill_tag=question.skill_tag
+        )
+        .first()
+    )
 
     if not skill_row:
+
         return jsonify({
             "error": (
                 "skill state not initialized — "
@@ -1716,20 +1830,17 @@ def answer():
         }), 400
 
     # =================================================
-    # CAPTURE BADGES BEFORE THIS ANSWER
-    # =================================================
-    badges_before = get_student_badges(student_id)
-
-    # =================================================
     # CHECK ANSWER
     # =================================================
+
     is_correct = (
         chosen_index == question.correct_index
     )
 
     # =================================================
-    # UPDATE MASTERY
+    # MASTERY
     # =================================================
+
     mastery_before = skill_row.mastery
 
     mastery_after = update_mastery(
@@ -1747,11 +1858,9 @@ def answer():
     )
 
     # =================================================
-    # CALCULATE POINTS
-    #
-    # Correct answer = +10
-    # Moving up mastery band = +25 bonus
+    # POINTS
     # =================================================
+
     points_earned = (
         POINTS_CORRECT
         if is_correct
@@ -1768,8 +1877,9 @@ def answer():
         points_earned += POINTS_BAND_UP
 
     # =================================================
-    # UPDATE STUDENT SKILL STATE
+    # UPDATE SKILL STATE
     # =================================================
+
     skill_row.mastery = mastery_after
 
     skill_row.points = (
@@ -1780,15 +1890,20 @@ def answer():
     # =================================================
     # LOG RESPONSE
     # =================================================
+
     response = Response(
-        session_id=session_id,
-        student_id=student_id,
-        question_id=question_id,
+        session_id=int(session_id),
+        student_id=int(student_id),
+        question_id=int(question_id),
         skill_tag=question.skill_tag,
         difficulty=question.difficulty,
         is_correct=is_correct,
-        response_time_sec=response_time_sec,
-        reread_count=reread_count,
+        response_time_sec=float(
+            response_time_sec or 0
+        ),
+        reread_count=int(
+            reread_count or 0
+        ),
         mastery_before=mastery_before,
         mastery_after=mastery_after,
     )
@@ -1796,23 +1911,25 @@ def answer():
     db.session.add(response)
 
     # =================================================
-    # UPDATE ASSESSMENT QUESTION COUNT
+    # UPDATE ASSESSMENT
     # =================================================
+
     assessment.question_count += 1
 
-    # =================================================
-    # COMPLETE ASSESSMENT AT 10 QUESTIONS
-    # =================================================
     if assessment.question_count >= 10:
+
         assessment.completed_at = datetime.utcnow()
 
     # =================================================
-    # SAVE EVERYTHING
+    # COMMIT
     # =================================================
+
     try:
+
         db.session.commit()
 
     except Exception as e:
+
         db.session.rollback()
 
         print(
@@ -1825,78 +1942,246 @@ def answer():
         }), 500
 
     # =================================================
-    # CALCULATE BADGES AFTER ANSWER
-    # =================================================
-    badges_after = get_student_badges(
-        student_id
-    )
-
-    newly_earned_badges = get_new_badges(
-        badges_before,
-        badges_after
-    )
-
-    # =================================================
-    # PASSAGE COMPLETION STATUS
+    # PASSAGE COMPLETION
     #
-    # Determine whether the passage associated with this
-    # question has now been completely answered.
+    # ONE SQL AGGREGATE QUERY instead of:
+    #   load all passage questions
+    #   load all student responses
+    #   compare Python sets
     # =================================================
+
     passage_completed = False
     completed_passage_count = 0
 
     if question.passage_id is not None:
 
-        passage_question_ids = {
-            q.id
-            for q in Question.query.filter_by(
-                passage_id=question.passage_id
-            ).all()
-        }
+        completion_row = (
+            db.session.query(
+                func.count(
+                    distinct(Question.id)
+                ).label("total_questions"),
 
-        answered_passage_question_ids = {
-            r.question_id
-            for r in Response.query.filter(
-                Response.student_id == student_id,
-                Response.question_id.in_(
-                    passage_question_ids
+                func.count(
+                    distinct(Response.question_id)
+                ).label("answered_questions")
+            )
+            .outerjoin(
+                Response,
+                and_(
+                    Response.question_id == Question.id,
+                    Response.student_id == int(student_id)
                 )
-            ).all()
-        }
-
-        if (
-            passage_question_ids
-            and
-            passage_question_ids.issubset(
-                answered_passage_question_ids
             )
-        ):
-            passage_completed = True
-
-    # Only calculate this when the badge could potentially
-    # be relevant. This also keeps the response useful to
-    # the frontend.
-    if len(badges_after) >= 0:
-        completed_passage_count = (
-            get_completed_passage_count(
-                student_id
+            .filter(
+                Question.passage_id == question.passage_id
             )
+            .first()
         )
+
+        total_questions = int(
+            completion_row.total_questions or 0
+        )
+
+        answered_questions = int(
+            completion_row.answered_questions or 0
+        )
+
+        passage_completed = (
+            total_questions > 0
+            and answered_questions >= total_questions
+        )
+
+    # =================================================
+    # BADGES
+    #
+    # Do NOT call get_student_badges() here.
+    # Its old five-passages implementation performs
+    # multiple queries for EVERY passage.
+    # =================================================
+
+    badges_after = []
+
+    # -------------------------------------------------
+    # BADGE: 3 CORRECT IN A ROW
+    # -------------------------------------------------
+
+    recent_responses = (
+        Response.query
+        .filter_by(
+            student_id=int(student_id)
+        )
+        .order_by(
+            Response.id.desc()
+        )
+        .limit(3)
+        .all()
+    )
+
+    three_in_a_row = (
+        len(recent_responses) == 3
+        and all(
+            row.is_correct
+            for row in recent_responses
+        )
+    )
+
+    if three_in_a_row:
+
+        badges_after.append({
+            "id": "three_in_a_row",
+            "name": BADGE_RULES["three_in_a_row"]["name"],
+            "icon": BADGE_RULES["three_in_a_row"]["icon"],
+        })
+
+    # -------------------------------------------------
+    # BADGE: FIRST STRONG SKILL
+    #
+    # We already know the updated skill row.
+    # Only query the other skill states if necessary.
+    # -------------------------------------------------
+
+    strong_skill_exists = (
+        StudentSkillState.query
+        .filter(
+            StudentSkillState.student_id == int(student_id),
+            StudentSkillState.mastery >= 0.70
+        )
+        .first()
+        is not None
+    )
+
+    if strong_skill_exists:
+
+        badges_after.append({
+            "id": "first_strong",
+            "name": BADGE_RULES["first_strong"]["name"],
+            "icon": BADGE_RULES["first_strong"]["icon"],
+        })
+
+    # -------------------------------------------------
+    # BADGE: 5 PASSAGES COMPLETED
+    #
+    # Only calculate this if the current answer actually
+    # completed a passage.
+    # -------------------------------------------------
+
+    if passage_completed:
+
+        completed_rows = (
+            db.session.query(
+                Question.passage_id
+            )
+            .outerjoin(
+                Response,
+                and_(
+                    Response.question_id == Question.id,
+                    Response.student_id == int(student_id)
+                )
+            )
+            .filter(
+                Question.passage_id.isnot(None)
+            )
+            .group_by(
+                Question.passage_id
+            )
+            .having(
+                func.count(
+                    distinct(Response.question_id)
+                )
+                >=
+                func.count(
+                    distinct(Question.id)
+                )
+            )
+            .all()
+        )
+
+        completed_passage_count = len(
+            completed_rows
+        )
+
+        if completed_passage_count >= 5:
+
+            badges_after.append({
+                "id": "five_passages",
+                "name": BADGE_RULES["five_passages"]["name"],
+                "icon": BADGE_RULES["five_passages"]["icon"],
+            })
+
+    # =================================================
+    # NEWLY EARNED BADGES
+    #
+    # Determine whether the badge became true because
+    # of THIS answer.
+    # =================================================
+
+    newly_earned_badges = []
+
+    # -------------------------------------------------
+    # 3 CORRECT IN A ROW
+    # -------------------------------------------------
+
+    if three_in_a_row:
+
+        previous_two = recent_responses[1:]
+
+        if len(previous_two) == 2:
+
+            previous_two_correct = all(
+                row.is_correct
+                for row in previous_two
+            )
+
+            # If the previous two were correct, the third
+            # response just completed the streak.
+            if previous_two_correct:
+
+                newly_earned_badges.append({
+                    "id": "three_in_a_row",
+                    "name": BADGE_RULES["three_in_a_row"]["name"],
+                    "icon": BADGE_RULES["three_in_a_row"]["icon"],
+                })
+
+    # -------------------------------------------------
+    # FIRST STRONG
+    # -------------------------------------------------
+
+    if (
+        band_before.value != "Strong"
+        and band_after.value == "Strong"
+    ):
+
+        newly_earned_badges.append({
+            "id": "first_strong",
+            "name": BADGE_RULES["first_strong"]["name"],
+            "icon": BADGE_RULES["first_strong"]["icon"],
+        })
+
+    # -------------------------------------------------
+    # FIVE PASSAGES
+    # -------------------------------------------------
+
+    if (
+        passage_completed
+        and completed_passage_count == 5
+    ):
+
+        newly_earned_badges.append({
+            "id": "five_passages",
+            "name": BADGE_RULES["five_passages"]["name"],
+            "icon": BADGE_RULES["five_passages"]["icon"],
+        })
 
     # =================================================
     # RESPONSE
     # =================================================
+
     return jsonify({
 
-        # ---------------------------------------------
-        # ANSWER RESULT
-        # ---------------------------------------------
         "is_correct": is_correct,
+
         "correct_index": question.correct_index,
 
-        # ---------------------------------------------
-        # MASTERY
-        # ---------------------------------------------
         "mastery_before": round(
             mastery_before,
             3
@@ -1917,14 +2202,8 @@ def answer():
 
         "leveled_up": leveled_up,
 
-        # ---------------------------------------------
-        # POINTS
-        # ---------------------------------------------
         "points_earned": points_earned,
 
-        # ---------------------------------------------
-        # ASSESSMENT PROGRESS
-        # ---------------------------------------------
         "question_count": (
             assessment.question_count
         ),
@@ -1935,9 +2214,6 @@ def answer():
             assessment.completed_at is not None
         ),
 
-        # ---------------------------------------------
-        # PASSAGE / QUEST PROGRESS
-        # ---------------------------------------------
         "passage_id": question.passage_id,
 
         "passage_completed": passage_completed,
@@ -1946,9 +2222,6 @@ def answer():
             completed_passage_count
         ),
 
-        # ---------------------------------------------
-        # BADGES
-        # ---------------------------------------------
         "badges": badges_after,
 
         "newly_earned_badges": (
@@ -2051,4 +2324,5 @@ def export():
 
 
 if __name__ == "__main__":
+    initialize_database()
     app.run(debug=True)
