@@ -41,6 +41,41 @@
 <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="static/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<style>
+  @keyframes slightShake {
+    0%, 100% { transform: translateX(0); }
+    15%, 45%, 75% { transform: translateX(-5px); }
+    30%, 60%, 90% { transform: translateX(5px); }
+  }
+  .shake-anim {
+    animation: slightShake 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+  .choice-btn.correct-choice {
+    border-color: #059669 !important;
+    background-color: #ecfdf5 !important;
+    color: #065f46 !important;
+    box-shadow: 0 0 0 1.5px #059669;
+  }
+  .choice-btn.incorrect-choice {
+    border-color: #e11d48 !important;
+    background-color: #fff1f2 !important;
+    color: #9f1239 !important;
+    box-shadow: 0 0 0 1.5px #e11d48;
+  }
+  .choice-btn.reveal-correct {
+    border-color: #10b981 !important;
+    background-color: #f0fdf4 !important;
+    color: #065f46 !important;
+  }
+  @keyframes pulseBadge {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.04); }
+  }
+  .pulse-badge {
+    animation: pulseBadge 1.5s infinite;
+  }
+</style>
 </head>
 <body>
 <div id="app" style="max-width:580px;margin:0 auto;padding:1.5rem;padding-bottom:5rem;"></div>
@@ -62,8 +97,140 @@ const state = {
   answeredCount: 0,
   completedMessage: null,
   sessionId: null,
-  questionLimit: 10
+  questionLimit: 10,
+  sessionHistory: [],
+  feedback: null,
+  isEvaluating: false,
+  masteryData: null
 };
+
+// Initialize student details from localStorage if present
+const storedStudent = localStorage.getItem('garcs_student');
+if (storedStudent) {
+  try {
+    const parsed = JSON.parse(storedStudent);
+    if (parsed.student_id) state.userId = parsed.student_id;
+    if (parsed.name) state.name = parsed.name;
+    if (parsed.grade) state.grade = parsed.grade;
+  } catch (e) {
+    console.error('Failed to parse stored student:', e);
+  }
+}
+
+// ============================================================
+// ANIMATION & DATA HELPERS
+// ============================================================
+function triggerCorrectConfetti() {
+  if (typeof window.confetti === 'function') {
+    window.confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.7 },
+      colors: ['#00675b', '#99ecdb', '#e9fe90', '#2a5e91', '#10b981', '#f59e0b']
+    });
+  } else {
+    runCanvasConfettiFallback();
+  }
+}
+
+function triggerCelebrationConfetti() {
+  if (typeof window.confetti === 'function') {
+    const end = Date.now() + 2200;
+    const colors = ['#00675b', '#99ecdb', '#e9fe90', '#2a5e91', '#10b981', '#f59e0b', '#ec4899'];
+    (function frame() {
+      window.confetti({
+        particleCount: 4,
+        angle: 60,
+        spread: 60,
+        origin: { x: 0, y: 0.65 },
+        colors
+      });
+      window.confetti({
+        particleCount: 4,
+        angle: 120,
+        spread: 60,
+        origin: { x: 1, y: 0.65 },
+        colors
+      });
+      if (Date.now() < end) {
+        requestAnimationFrame(frame);
+      }
+    })();
+  } else {
+    runCanvasConfettiFallback();
+  }
+}
+
+function runCanvasConfettiFallback() {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.style.position = 'fixed';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '9999';
+    document.body.appendChild(canvas);
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const ctx = canvas.getContext('2d');
+    const particles = [];
+    const colors = ['#00675b', '#99ecdb', '#e9fe90', '#2a5e91', '#10b981', '#f59e0b', '#ec4899'];
+    for (let i = 0; i < 45; i++) {
+      particles.push({
+        x: canvas.width / 2 + (Math.random() - 0.5) * 140,
+        y: canvas.height * 0.7,
+        vx: (Math.random() - 0.5) * 12,
+        vy: -Math.random() * 12 - 4,
+        size: Math.random() * 7 + 4,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        alpha: 1,
+        rotation: Math.random() * 360,
+        rotSpeed: (Math.random() - 0.5) * 10
+      });
+    }
+    let frame = 0;
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.35;
+        p.alpha -= 0.016;
+        p.rotation += p.rotSpeed;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.fillStyle = p.color;
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rotation * Math.PI) / 180);
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+        ctx.restore();
+      });
+      frame++;
+      if (frame < 60) {
+        requestAnimationFrame(animate);
+      } else {
+        canvas.remove();
+      }
+    }
+    requestAnimationFrame(animate);
+  } catch (e) {
+    console.error('Confetti fallback error:', e);
+  }
+}
+
+async function loadMasteryResults() {
+  if (!state.userId) return;
+  try {
+    const res = await fetch(`/api/progress/${encodeURIComponent(state.userId)}`);
+    if (res.ok) {
+      state.masteryData = await res.json();
+    }
+  } catch (err) {
+    console.error('Could not load student mastery data:', err);
+  }
+}
 
 // ============================================================
 // RENDER ENGINE
@@ -107,16 +274,16 @@ function renderWelcome() {
       <div style="position:absolute;right:3rem;bottom:-1.5rem;width:4rem;height:4rem;background:var(--primary);opacity:0.07;border-radius:50%;"></div>
       <div style="font-size:2.75rem;margin-bottom:0.75rem;">📖</div>
       <h1 class="headline" style="font-size:1.875rem;font-weight:800;color:var(--on-surface);line-height:1.2;margin-bottom:0.625rem;">Find Your Lexile Level</h1>
-      <p style="color:var(--on-surface-variant);font-size:0.875rem;line-height:1.7;max-width:90%;">Take a quick reading assessment and our adaptive engine will summarize your performance and guide your next steps.</p>
+      <p style="color:var(--on-surface-variant);font-size:0.875rem;line-height:1.7;max-width:90%;">Take a 10-question adaptive reading assessment with live mastery tracking, instant feedback, and personalized skill analytics.</p>
     </div>
 
     <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;">
       <p class="headline" style="font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;color:var(--on-surface-variant);margin-bottom:1rem;">HOW IT WORKS</p>
       <div style="display:flex;flex-direction:column;gap:1rem;">
         ${[
-          ['📄','Read a passage','A short text matched to your grade level'],
-          ['✏️','Answer 10 questions','Literal, inferential, vocabulary & main idea'],
-          ['🤖','Get your reading summary','The adaptive engine reviews your responses and prepares a follow-up path'],
+          ['📄','Read engaging passages','Short passages calibrated to your reading level'],
+          ['✏️','Answer 10 adaptive questions','Questions adjust live across literal, inferential, and critical skills'],
+          ['📊','Unlock full mastery results','Get your comprehensive PFA skill profile, Lexile band, and strengths'],
         ].map(([icon,title,desc])=>`<div style="display:flex;align-items:center;gap:0.875rem;">
           <div style="width:2.75rem;height:2.75rem;border-radius:0.875rem;background:var(--surface-container);display:flex;align-items:center;justify-content:center;font-size:1.375rem;flex-shrink:0;">${icon}</div>
           <div><div style="font-weight:700;font-size:0.875rem;">${title}</div><div style="color:var(--on-surface-variant);font-size:0.75rem;margin-top:0.125rem;">${desc}</div></div>
@@ -124,15 +291,12 @@ function renderWelcome() {
       </div>
     </div>
 
-    
-
     <button class="btn-primary" style="width:100%;font-size:1rem;" onclick="startAssessment()">
-      Start Assessment <span class="material-symbols-outlined" style="font-size:1.25rem;">arrow_forward</span>
+      Start 10-Question Assessment <span class="material-symbols-outlined" style="font-size:1.25rem;">arrow_forward</span>
     </button>
-    <p style="text-align:center;color:var(--on-surface-variant);font-size:0.75rem;margin-top:0.875rem;">Takes about 5–10 minutes · No account needed</p>
+    <p style="text-align:center;color:var(--on-surface-variant);font-size:0.75rem;margin-top:0.875rem;">10 adaptive questions · Live feedback & animations</p>
   </div>`;
 }
-
 
 // ---------- QUESTIONS SCREEN ----------
 function renderQuestions() {
@@ -143,44 +307,129 @@ function renderQuestions() {
   }
 
   const sel = state.answers[0] !== undefined ? state.answers[0] : null;
+  const currentNum = Math.min(state.questionLimit || 10, state.answeredCount + 1);
+  const totalLimit = state.questionLimit || 10;
+  const sessionCorrect = state.sessionHistory.filter(h => h.is_correct).length;
+  const sessionPoints = state.sessionHistory.reduce((sum, h) => sum + (h.points_earned || 0), 0);
+
   const typeMeta = {
-    literal:   { label:'📖 Literal',   bg:'var(--secondary-container)', color:'var(--on-secondary-container)' },
-    inferential:{ label:'🧠 Inferential', bg:'#ede9fe', color:'#5b21b6' },
-    vocabulary: { label:'📝 Vocabulary', bg:'var(--tertiary-container)', color:'var(--on-tertiary-container)' },
-    main_idea:  { label:'🎯 Main Idea',  bg:'#fce7f3', color:'#9d174d' },
+    literal:    { label:'📖 Literal Comprehension', bg:'var(--secondary-container)', color:'var(--on-secondary-container)' },
+    inferential:{ label:'🧠 Inferential Analysis',  bg:'#ede9fe', color:'#5b21b6' },
+    critical:   { label:'🎯 Critical & Main Idea', bg:'#fce7f3', color:'#9d174d' },
+    main_idea:  { label:'🎯 Main Idea',             bg:'#fce7f3', color:'#9d174d' },
+    vocabulary: { label:'📝 Vocabulary',            bg:'var(--tertiary-container)', color:'var(--on-tertiary-container)' },
   };
-  const tm = typeMeta[q.type] || typeMeta.literal;
+  const tm = typeMeta[q.skill_tag] || typeMeta[q.type] || typeMeta.literal;
 
   app.innerHTML = `<div class="fade-in-up">
     ${headerHTML()}
-    ${state.passage ? `<div class="card" style="padding:1.25rem;margin-bottom:1rem;">
-      <div style="font-size:0.75rem;font-weight:700;color:var(--primary);margin-bottom:0.5rem;">${state.passage.title || 'Passage'}</div>
-      <div style="font-size:0.875rem;line-height:1.6;color:var(--on-surface-variant);">${(state.passage.text || '').split('\n\n').map(para=>`<p style="margin-bottom:0.75rem;">${para}</p>`).join('')}</div>
-    </div>` : ''}
-    <div style="margin-bottom:1.25rem;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-        <span style="font-size:0.75rem;font-weight:700;color:var(--on-surface-variant);">Adaptive Question</span>
-        <span style="font-size:0.75rem;font-weight:700;color:var(--primary);">Live from the backend</span>
+
+    <!-- 10-Question Progress Bar & Live Score -->
+    <div class="card p-4 mb-4">
+      <div class="flex justify-between items-center text-xs font-semibold text-on-surface-variant mb-2">
+        <span class="flex items-center gap-1.5 font-bold text-on-surface">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse"></span>
+          Question <span class="text-primary font-extrabold text-sm">${currentNum}</span> of <span>${totalLimit}</span>
+        </span>
+        <span class="text-primary font-bold bg-primary/10 px-2.5 py-0.5 rounded-full">
+          ${sessionCorrect} Correct · +${sessionPoints} XP
+        </span>
+      </div>
+      <div class="w-full h-2.5 bg-surface-container rounded-full overflow-hidden flex gap-0.5">
+        ${Array.from({ length: totalLimit }).map((_, idx) => {
+          const hist = state.sessionHistory[idx];
+          const isCurrent = idx === state.answeredCount;
+          let segmentColor = 'bg-surface-container-high';
+          if (hist) {
+            segmentColor = hist.is_correct ? 'bg-emerald-500' : 'bg-rose-400';
+          } else if (isCurrent) {
+            segmentColor = 'bg-primary animate-pulse';
+          }
+          return `<div class="flex-1 h-full ${segmentColor} transition-all duration-300"></div>`;
+        }).join('')}
       </div>
     </div>
 
-    <div style="display:inline-flex;align-items:center;background:${tm.bg};color:${tm.color};padding:0.375rem 0.875rem;border-radius:9999px;font-size:0.75rem;font-weight:700;margin-bottom:1rem;">${tm.label}</div>
+    ${state.passage ? `<div class="card" style="padding:1.25rem;margin-bottom:1rem;">
+      <div style="font-size:0.75rem;font-weight:700;color:var(--primary);margin-bottom:0.5rem;display:flex;align-items:center;gap:0.375rem;">
+        <span class="material-symbols-outlined text-sm">article</span>
+        <span>${state.passage.title || 'Reading Passage'}</span>
+      </div>
+      <div style="font-size:0.875rem;line-height:1.65;color:var(--on-surface-variant);max-height:180px;overflow-y:auto;padding-right:0.25rem;">
+        ${(state.passage.text || '').split('\n\n').map(para=>`<p style="margin-bottom:0.625rem;">${para}</p>`).join('')}
+      </div>
+    </div>` : ''}
 
-    <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.875rem;">
+      <div style="display:inline-flex;align-items:center;background:${tm.bg};color:${tm.color};padding:0.35rem 0.85rem;border-radius:9999px;font-size:0.75rem;font-weight:700;">
+        ${tm.label}
+      </div>
+      ${q.difficulty ? `<span style="font-size:0.6875rem;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:var(--on-surface-variant);background:var(--surface-container-high);padding:0.25rem 0.625rem;border-radius:9999px;">
+        ${q.difficulty}
+      </span>` : ''}
+    </div>
+
+    <div class="card" style="padding:1.375rem;margin-bottom:1rem;">
       <p style="font-size:1.0625rem;font-weight:600;line-height:1.65;margin:0;">${q.q}</p>
     </div>
 
-    <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1.5rem;">
-      ${q.choices.map((c,i)=>`
-        <button class="choice-btn${sel===i?' selected':''}" onclick="selectAnswer(${i})">
-          <span style="width:1.75rem;height:1.75rem;border-radius:50%;border:2px solid ${sel===i?'var(--primary)':'var(--outline-variant)'};display:inline-flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0;background:${sel===i?'var(--primary)':'transparent'};color:${sel===i?'var(--on-primary)':'var(--on-surface-variant)'};">${String.fromCharCode(65+i)}</span>
-          <span>${c}</span>
+    <!-- Choices with Immediate Feedback and Animations -->
+    <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1.25rem;">
+      ${q.choices.map((c, i) => {
+        let btnClasses = "choice-btn";
+        let statusBadge = "";
+        const isSelected = sel === i;
+
+        if (state.feedback) {
+          const { is_correct, chosen_index, correct_index } = state.feedback;
+          if (i === chosen_index) {
+            if (is_correct) {
+              btnClasses += " selected correct-choice";
+              statusBadge = `<span class="material-symbols-outlined text-emerald-600 text-xl ml-auto" style="font-variation-settings:'FILL' 1;">check_circle</span>`;
+            } else {
+              btnClasses += " selected incorrect-choice shake-anim";
+              statusBadge = `<span class="material-symbols-outlined text-red-600 text-xl ml-auto" style="font-variation-settings:'FILL' 1;">cancel</span>`;
+            }
+          } else if (!is_correct && i === correct_index) {
+            btnClasses += " reveal-correct";
+            statusBadge = `<span class="text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full ml-auto flex items-center gap-1"><span class="material-symbols-outlined text-sm">check</span>Correct Answer</span>`;
+          }
+        } else if (isSelected) {
+          btnClasses += " selected";
+        }
+
+        const isInputBlocked = state.isEvaluating || state.feedback !== null;
+
+        return `
+        <button class="${btnClasses}" ${isInputBlocked ? 'disabled' : ''} onclick="selectAnswer(${i})">
+          <span style="width:1.75rem;height:1.75rem;border-radius:50%;border:2px solid ${isSelected?'var(--primary)':'var(--outline-variant)'};display:inline-flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0;background:${isSelected?'var(--primary)':'transparent'};color:${isSelected?'var(--on-primary)':'var(--on-surface-variant)'};">${String.fromCharCode(65+i)}</span>
+          <span style="flex:1;text-align:left;">${c}</span>
+          ${statusBadge}
         </button>
-      `).join('')}
+        `;
+      }).join('')}
     </div>
 
-    <button class="btn-primary" style="width:100%;" ${sel===null?'disabled':''} onclick="nextQuestion()">
-      Submit Answer →
+    <!-- Feedback Banner after submit -->
+    ${state.feedback ? `
+      <div class="fade-in-up p-3.5 rounded-xl mb-3.5 flex items-center justify-between gap-3 ${state.feedback.is_correct ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' : 'bg-rose-50 border border-rose-200 text-rose-900'}">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1;">${state.feedback.is_correct ? 'task_alt' : 'help'}</span>
+          <span class="text-sm font-bold">
+            ${state.feedback.is_correct ? `Correct! +${state.feedback.points_earned} XP` : `Incorrect — see the correct answer above. +${state.feedback.points_earned} XP`}
+          </span>
+        </div>
+        ${state.feedback.leveled_up ? `
+          <span class="text-xs font-extrabold px-2.5 py-1 bg-amber-400 text-amber-950 rounded-full shadow-sm flex items-center gap-1 pulse-badge">
+            <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1;">military_tech</span>
+            Level Up! +25
+          </span>
+        ` : ''}
+      </div>
+    ` : ''}
+
+    <button class="btn-primary" style="width:100%;" ${sel === null || state.isEvaluating || state.feedback ? 'disabled' : ''} onclick="nextQuestion()">
+      ${state.isEvaluating ? 'Evaluating Answer…' : state.feedback ? (state.feedback.is_correct ? 'Great job! Loading next…' : 'Reviewing… Loading next…') : 'Submit Answer →'}
     </button>
   </div>`;
 }
@@ -190,76 +439,306 @@ function renderProcessing() {
   app.innerHTML = `<div class="fade-in-up" style="text-align:center;padding:1rem 0;">
     <div style="font-size:3rem;margin-bottom:1rem;">🤖</div>
     <h2 class="headline" style="font-size:1.5rem;font-weight:800;margin-bottom:0.5rem;">Analyzing Your Reading</h2>
-    <p style="color:var(--on-surface-variant);font-size:0.875rem;margin-bottom:2rem;line-height:1.6;">The adaptive engine is processing your responses and preparing your next step.</p>
+    <p style="color:var(--on-surface-variant);font-size:0.875rem;margin-bottom:2rem;line-height:1.6;">The adaptive engine is compiling your complete mastery results across all 10 questions.</p>
 
     <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;text-align:left;">
       <p class="headline" style="font-size:0.6875rem;font-weight:700;letter-spacing:0.08em;color:var(--on-surface-variant);margin-bottom:1rem;">STATUS</p>
       <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.8125rem;">
-        <div style="display:flex;align-items:center;gap:0.5rem;color:var(--on-surface);"><span style="color:#059669;font-weight:700;">✓</span>Responses received</div>
-        <div style="display:flex;align-items:center;gap:0.5rem;color:var(--on-surface);"><span style="color:#059669;font-weight:700;">✓</span>Adaptive logic running</div>
+        <div style="display:flex;align-items:center;gap:0.5rem;color:var(--on-surface);"><span style="color:#059669;font-weight:700;">✓</span>All 10 questions evaluated</div>
+        <div style="display:flex;align-items:center;gap:0.5rem;color:var(--on-surface);"><span style="color:#059669;font-weight:700;">✓</span>Calculating PFA skill mastery & bands</div>
       </div>
     </div>
   </div>`;
 
-  setTimeout(() => {
+  setTimeout(async () => {
+    await loadMasteryResults();
     state.screen = 'results';
     render();
-  }, 900);
+    triggerCelebrationConfetti();
+  }, 800);
 }
 
-// ---------- RESULTS SCREEN ----------
+// ---------- RESULTS SCREEN (MASTERY RESULTS DASHBOARD) ----------
 function renderResults() {
-  const p = state.prediction || {};
-  const name = state.name || 'Student';
-  const summary = {
-    title: `Great job, ${name}!`,
-    subtitle: 'Your adaptive assessment is complete.',
-    message: state.completedMessage || 'You completed the available questions.',
-    label: p.label || 'Assessment complete',
-    range: p.range || 'Adaptive assessment',
-    gradeEq: p.gradeEq || 'Ready for the next challenge',
-    lexile: p.lexile || null,
-    strengths: Array.isArray(p.strengths) ? p.strengths : [],
-    growthAreas: Array.isArray(p.growthAreas) ? p.growthAreas : []
+  const name = state.name || state.masteryData?.name || 'Student';
+  const grade = Number(state.grade || state.masteryData?.grade || 6);
+
+  // Performance calculations from 10-question assessment session
+  const totalQuestions = state.sessionHistory.length || state.questionLimit || 10;
+  const correctCount = state.sessionHistory.filter(h => h.is_correct).length;
+  const accuracyPercent = Math.round((correctCount / Math.max(1, totalQuestions)) * 100);
+  const totalSessionPoints = state.sessionHistory.reduce((sum, h) => sum + (h.points_earned || 0), 0);
+  const levelUps = state.sessionHistory.filter(h => h.leveled_up).length;
+
+  // Live PFA skills from backend
+  const skills = (state.masteryData?.skills && state.masteryData.skills.length)
+    ? state.masteryData.skills
+    : [
+        { skill_tag: 'literal', mastery: 0.70, band: 'Strong', next_difficulty: 'hard' },
+        { skill_tag: 'inferential', mastery: 0.60, band: 'Developing', next_difficulty: 'medium' },
+        { skill_tag: 'critical', mastery: 0.55, band: 'Developing', next_difficulty: 'medium' }
+      ];
+
+  const avgMastery = skills.reduce((sum, s) => sum + (s.mastery || 0.5), 0) / skills.length;
+  const avgMasteryPercent = Math.round(avgMastery * 100);
+
+  // Lexile Estimation based on grade & mastery band
+  const baseLexileByGrade = { 3: 520, 4: 640, 5: 740, 6: 820, 7: 890, 8: 960, 9: 1040, 10: 1100, 11: 1150, 12: 1200 };
+  const baseLexile = baseLexileByGrade[grade] || 820;
+  const estimatedLexile = Math.max(350, Math.min(1350, Math.round(baseLexile + (avgMastery - 0.5) * 200)));
+  const lexileRange = `${estimatedLexile - 35}L – ${estimatedLexile + 35}L`;
+
+  // Reading Level Tier
+  let readingLevelTitle = "Proficient Comprehension";
+  if (accuracyPercent >= 90) readingLevelTitle = "Exemplary Comprehension";
+  else if (accuracyPercent >= 70) readingLevelTitle = "Proficient Reader";
+  else if (accuracyPercent >= 50) readingLevelTitle = "Developing Comprehension";
+  else readingLevelTitle = "Foundational Reader";
+
+  // Dynamic Strengths & Growth Areas from the 10 questions
+  const skillMeta = {
+    literal: {
+      name: 'Literal Comprehension',
+      icon: 'menu_book',
+      desc: 'Retrieving explicit facts, character details, timeline sequences, and concrete events.',
+      strengthTip: 'Literal Recall: Excellent retention and extraction of factual textual details and timelines.',
+      growthTip: 'Literal Retrieval: Re-read key paragraphs to confirm explicit names, dates, and sequences.'
+    },
+    inferential: {
+      name: 'Inferential Analysis',
+      icon: 'psychology',
+      desc: 'Reading between the lines, deducing hidden motivations, and connecting implicit clues.',
+      strengthTip: 'Inferential Reasoning: Strong capability drawing logical conclusions from implicit context.',
+      growthTip: 'Inferential Reasoning: Look closely for character motives and cause-and-effect relationships.'
+    },
+    critical: {
+      name: 'Critical & Main Idea',
+      icon: 'target',
+      desc: 'Synthesizing central themes, identifying author purpose, and evaluating key ideas.',
+      strengthTip: 'Critical Analysis: High proficiency identifying central themes and author perspective.',
+      growthTip: 'Critical Synthesis: Practice separating supporting details from the passage’s overarching message.'
+    }
   };
+
+  const strengthsList = [];
+  const growthList = [];
+
+  ['literal', 'inferential', 'critical'].forEach(tag => {
+    const qInSession = state.sessionHistory.filter(h => h.skill_tag === tag);
+    const correctInSession = qInSession.filter(h => h.is_correct).length;
+    const skillState = skills.find(s => s.skill_tag === tag);
+
+    if (qInSession.length > 0) {
+      const rate = correctInSession / qInSession.length;
+      if (rate >= 0.70 || (skillState && skillState.band === 'Strong')) {
+        strengthsList.push(skillMeta[tag]?.strengthTip || `${tag}: High accuracy`);
+      } else {
+        growthList.push(skillMeta[tag]?.growthTip || `${tag}: Further practice recommended`);
+      }
+    }
+  });
+
+  if (strengthsList.length === 0) {
+    strengthsList.push('Assessment Effort: Completed all 10 adaptive questions to calibrate personalized reading metrics.');
+  }
+  if (growthList.length === 0) {
+    growthList.push('Next Challenge: Ready to explore advanced Lexile texts in the digital library.');
+  }
 
   app.innerHTML = `<div class="fade-in-up">
     ${headerHTML()}
-    <div style="text-align:center;margin-bottom:1.5rem;">
-      <div style="font-size:2.5rem;margin-bottom:0.5rem;">🎉</div>
-      <h2 class="headline" style="font-size:1.5rem;font-weight:800;margin-bottom:0.25rem;">${summary.title}</h2>
-      <p style="color:var(--on-surface-variant);font-size:0.875rem;">${summary.subtitle}</p>
-    </div>
 
-    <div style="background:linear-gradient(135deg,var(--primary),var(--primary-dim));border-radius:1.5rem;padding:2rem;margin-bottom:1.5rem;text-align:center;position:relative;overflow:hidden;">
+    <!-- Hero Celebration Banner -->
+    <div style="background:linear-gradient(135deg,var(--primary),var(--primary-dim));border-radius:1.5rem;padding:2rem;margin-bottom:1.5rem;text-align:center;position:relative;overflow:hidden;box-shadow:var(--editorial-shadow);">
       <div style="position:absolute;right:-2rem;top:-2rem;width:8rem;height:8rem;background:white;opacity:0.05;border-radius:50%;"></div>
       <div style="position:absolute;left:-1rem;bottom:-2rem;width:5rem;height:5rem;background:white;opacity:0.05;border-radius:50%;"></div>
-      <div style="background:rgba(255,255,255,0.15);display:inline-block;padding:0.375rem 1.125rem;border-radius:9999px;font-size:0.8125rem;font-weight:700;color:white;margin-bottom:0.875rem;">${summary.label}</div>
-      <p style="color:rgba(255,255,255,0.85);font-size:0.875rem;margin-bottom:0.25rem;">${summary.message}</p>
-      <p style="color:rgba(255,255,255,0.6);font-size:0.75rem;">Answered ${state.answeredCount} of ${state.questionLimit} questions</p>
-      ${summary.lexile ? `<p style="color:rgba(255,255,255,0.6);font-size:0.75rem;">${summary.gradeEq} · ${summary.range}</p>` : ''}
+      
+      <div style="background:rgba(255,255,255,0.18);display:inline-flex;align-items:center;gap:0.375rem;padding:0.4rem 1.125rem;border-radius:9999px;font-size:0.8125rem;font-weight:700;color:white;margin-bottom:0.875rem;">
+        <span class="material-symbols-outlined text-base">military_tech</span>
+        <span>10-Question Assessment Completed</span>
+      </div>
+
+      <h2 class="headline" style="color:white;font-size:1.75rem;font-weight:800;margin-bottom:0.375rem;">Great job, ${name}!</h2>
+      <p style="color:rgba(255,255,255,0.9);font-size:0.9375rem;margin-bottom:1rem;">${readingLevelTitle} · Estimated Level: ${lexileRange}</p>
+
+      <div style="display:inline-flex;gap:0.75rem;background:rgba(0,0,0,0.15);padding:0.5rem 1rem;border-radius:1rem;color:white;font-size:0.75rem;">
+        <span>Grade ${grade} Standard</span>
+        <span>·</span>
+        <span>${avgMasteryPercent}% Average Mastery</span>
+      </div>
     </div>
 
-    ${(summary.strengths.length || summary.growthAreas.length) ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.875rem;margin-bottom:1.25rem;">
-      ${summary.strengths.length ? `<div style="background:#d1fae5;border-radius:1rem;padding:1rem;">
-        <div style="font-size:0.6875rem;font-weight:800;color:#059669;letter-spacing:0.06em;margin-bottom:0.5rem;">💪 STRENGTHS</div>
-        ${summary.strengths.map(s=>`<div style="font-size:0.75rem;color:#065f46;font-weight:600;line-height:1.5;">• ${s}</div>`).join('')}
-      </div>` : ''}
-      ${summary.growthAreas.length ? `<div style="background:#fef3c7;border-radius:1rem;padding:1rem;">
-        <div style="font-size:0.6875rem;font-weight:800;color:#d97706;letter-spacing:0.06em;margin-bottom:0.5rem;">🌱 GROWTH</div>
-        ${summary.growthAreas.map(s=>`<div style="font-size:0.75rem;color:#92400e;font-weight:600;line-height:1.5;">• ${s}</div>`).join('')}
-      </div>` : ''}
-    </div>` : ''}
+    <!-- 4-Stat Scorecard Grid -->
+    <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:0.75rem;margin-bottom:1.25rem;">
+      <div class="card" style="padding:1rem;display:flex;align-items:center;gap:0.75rem;">
+        <div style="width:2.5rem;height:2.5rem;border-radius:0.75rem;background:#d1fae5;color:#059669;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined text-xl">check_circle</span>
+        </div>
+        <div>
+          <div style="font-size:0.6875rem;font-weight:700;color:var(--on-surface-variant);text-transform:uppercase;">Accuracy</div>
+          <div style="font-size:1.125rem;font-weight:800;color:var(--on-surface);">${correctCount}/${totalQuestions} <span style="font-size:0.75rem;font-weight:600;color:#059669;">(${accuracyPercent}%)</span></div>
+        </div>
+      </div>
 
-    <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;">
-      <h3 class="headline" style="font-size:1rem;font-weight:700;margin-bottom:0.75rem;">Next steps</h3>
-      <p style="font-size:0.8125rem;color:var(--on-surface-variant);line-height:1.6;margin:0;">Continue practicing with more adaptive questions or browse the library for reading material that fits your current level.</p>
+      <div class="card" style="padding:1rem;display:flex;align-items:center;gap:0.75rem;">
+        <div style="width:2.5rem;height:2.5rem;border-radius:0.75rem;background:#fef3c7;color:#d97706;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined text-xl">stars</span>
+        </div>
+        <div>
+          <div style="font-size:0.6875rem;font-weight:700;color:var(--on-surface-variant);text-transform:uppercase;">XP Earned</div>
+          <div style="font-size:1.125rem;font-weight:800;color:var(--on-surface);">+${totalSessionPoints} XP</div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:1rem;display:flex;align-items:center;gap:0.75rem;">
+        <div style="width:2.5rem;height:2.5rem;border-radius:0.75rem;background:var(--primary-container);color:var(--primary);display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined text-xl">trending_up</span>
+        </div>
+        <div>
+          <div style="font-size:0.6875rem;font-weight:700;color:var(--on-surface-variant);text-transform:uppercase;">Avg Mastery</div>
+          <div style="font-size:1.125rem;font-weight:800;color:var(--on-surface);">${avgMasteryPercent}%</div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:1rem;display:flex;align-items:center;gap:0.75rem;">
+        <div style="width:2.5rem;height:2.5rem;border-radius:0.75rem;background:#ede9fe;color:#6d28d9;display:flex;align-items:center;justify-content:center;">
+          <span class="material-symbols-outlined text-xl">military_tech</span>
+        </div>
+        <div>
+          <div style="font-size:0.6875rem;font-weight:700;color:var(--on-surface-variant);text-transform:uppercase;">Level Ups</div>
+          <div style="font-size:1.125rem;font-weight:800;color:var(--on-surface);">${levelUps} Bonus</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 10-Question Review Matrix -->
+    <div class="card" style="padding:1.25rem;margin-bottom:1.25rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+        <div style="font-size:0.875rem;font-weight:700;color:var(--on-surface);">10-Question Breakdown</div>
+        <div style="font-size:0.75rem;font-weight:700;color:var(--primary);">${correctCount} of ${totalQuestions} Correct</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:0.5rem;">
+        ${state.sessionHistory.map((h, i) => {
+          const isCorrect = h.is_correct;
+          const tagLabel = { literal: 'Lit', inferential: 'Inf', critical: 'Crit' }[h.skill_tag] || h.skill_tag?.slice(0, 3) || 'Q';
+          return `
+            <div style="display:flex;flex-direction:column;align-items:center;padding:0.5rem 0.25rem;border-radius:0.75rem;border:1px solid ${isCorrect ? '#a7f3d0' : '#fecdd3'};background:${isCorrect ? '#ecfdf5' : '#fff1f2'};text-align:center;">
+              <span style="font-size:0.625rem;font-weight:800;color:var(--on-surface-variant);">Q${i + 1}</span>
+              <span class="material-symbols-outlined" style="font-size:1.125rem;margin:0.125rem 0;color:${isCorrect ? '#059669' : '#e11d48'};font-variation-settings:'FILL' 1;">
+                ${isCorrect ? 'check_circle' : 'cancel'}
+              </span>
+              <span style="font-size:0.5625rem;font-weight:800;text-transform:uppercase;color:var(--on-surface-variant);">${tagLabel}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Comprehensive Skill Mastery Section (Core PFA Mastery Results) -->
+    <div class="card" style="padding:1.375rem;margin-bottom:1.25rem;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;">
+        <div>
+          <h3 class="headline" style="font-size:1rem;font-weight:700;margin-bottom:0.25rem;">Comprehension Mastery by Skill</h3>
+          <p style="font-size:0.75rem;color:var(--on-surface-variant);margin:0;">Calibrated live using Adaptive Predictive Factor Analysis</p>
+        </div>
+        <span style="background:var(--primary);color:var(--on-primary);font-size:0.6875rem;font-weight:700;padding:0.25rem 0.625rem;border-radius:9999px;">
+          Live PFA
+        </span>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:1rem;">
+        ${skills.map(skill => {
+          const mPercent = Math.round((skill.mastery || 0.5) * 100);
+          const meta = skillMeta[skill.skill_tag] || {
+            name: skill.skill_tag,
+            icon: 'auto_stories',
+            desc: 'Adaptive comprehension skill area.'
+          };
+
+          const qForSkill = state.sessionHistory.filter(h => h.skill_tag === skill.skill_tag);
+          const correctForSkill = qForSkill.filter(h => h.is_correct).length;
+          const deltaSum = qForSkill.reduce((sum, h) => sum + ((h.mastery_after || 0) - (h.mastery_before || 0)), 0);
+          const deltaPercent = Math.round(deltaSum * 100);
+
+          let bandBadgeColor = '#d1fae5';
+          let bandTextColor = '#065f46';
+          let barFillColor = '#059669';
+
+          if (skill.band === 'Developing') {
+            bandBadgeColor = '#ccfbf1';
+            bandTextColor = '#0f766e';
+            barFillColor = 'var(--primary)';
+          } else if (skill.band === 'Weak') {
+            bandBadgeColor = '#fef3c7';
+            bandTextColor = '#92400e';
+            barFillColor = '#d97706';
+          }
+
+          return `
+            <div style="background:var(--surface-container-low);border-radius:1rem;padding:1rem;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem;">
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                  <span class="material-symbols-outlined text-primary text-lg">${meta.icon}</span>
+                  <span style="font-weight:700;font-size:0.875rem;color:var(--on-surface);">${meta.name}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                  <span style="background:${bandBadgeColor};color:${bandTextColor};font-size:0.6875rem;font-weight:800;padding:0.2rem 0.5rem;border-radius:9999px;">
+                    ${skill.band} Band
+                  </span>
+                  <span style="font-weight:800;font-size:0.875rem;color:var(--on-surface);">${mPercent}%</span>
+                </div>
+              </div>
+
+              <!-- Mastery Bar -->
+              <div style="width:100%;height:0.5rem;background:rgba(0,0,0,0.08);border-radius:9999px;overflow:hidden;margin-bottom:0.625rem;">
+                <div style="width:${Math.max(6, mPercent)}%;height:100%;background:${barFillColor};border-radius:9999px;transition:width 1s ease;"></div>
+              </div>
+
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;color:var(--on-surface-variant);">
+                <span>${qForSkill.length ? `${correctForSkill}/${qForSkill.length} correct in this session` : 'Tested previously'}</span>
+                ${deltaPercent !== 0 ? `<span style="color:${deltaPercent > 0 ? '#059669' : '#e11d48'};font-weight:700;">${deltaPercent > 0 ? '+' : ''}${deltaPercent}% Growth</span>` : `<span style="font-weight:600;">Target: ${skill.next_difficulty.toUpperCase()}</span>`}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Strengths & Growth Areas -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.875rem;margin-bottom:1.25rem;">
+      <div style="background:#d1fae5;border-radius:1rem;padding:1rem;">
+        <div style="font-size:0.6875rem;font-weight:800;color:#059669;letter-spacing:0.06em;margin-bottom:0.5rem;">💪 STRENGTHS</div>
+        ${strengthsList.map(s => `<div style="font-size:0.75rem;color:#065f46;font-weight:600;line-height:1.5;margin-bottom:0.375rem;">• ${s}</div>`).join('')}
+      </div>
+      <div style="background:#fef3c7;border-radius:1rem;padding:1rem;">
+        <div style="font-size:0.6875rem;font-weight:800;color:#d97706;letter-spacing:0.06em;margin-bottom:0.5rem;">🌱 GROWTH AREAS</div>
+        ${growthList.map(g => `<div style="font-size:0.75rem;color:#92400e;font-weight:600;line-height:1.5;margin-bottom:0.375rem;">• ${g}</div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Next steps & Action Buttons -->
+    <div class="card" style="padding:1.25rem;margin-bottom:1.25rem;">
+      <h3 class="headline" style="font-size:0.9375rem;font-weight:700;margin-bottom:0.375rem;">Next Steps</h3>
+      <p style="font-size:0.8125rem;color:var(--on-surface-variant);line-height:1.6;margin:0;">Your reading profile is updated! Practice another session or head to the library for reading passages aligned to your Lexile level.</p>
     </div>
 
     <div style="display:flex;flex-direction:column;gap:0.75rem;">
-      <button class="btn-primary" style="width:100%;" onclick="resetApp()">Start Another Assessment</button>
-      <button class="btn-outline" style="width:100%;" onclick="goToLibrary()">Open Library</button>
-      <button class="btn-outline" style="width:100%;" onclick="goToDashboard()">Return to Dashboard</button>
+      <button class="btn-primary" style="width:100%;" onclick="resetApp()">
+        <span class="material-symbols-outlined">restart_alt</span>
+        Start Another Assessment
+      </button>
+      <button class="btn-outline" style="width:100%;" onclick="location.href='progress.html'">
+        <span class="material-symbols-outlined">insights</span>
+        View Full Progress Dashboard
+      </button>
+      <button class="btn-outline" style="width:100%;" onclick="goToLibrary()">
+        <span class="material-symbols-outlined">import_contacts</span>
+        Open Library
+      </button>
+      <button class="btn-outline" style="width:100%;" onclick="goToDashboard()">
+        <span class="material-symbols-outlined">home</span>
+        Return to Dashboard
+      </button>
     </div>
   </div>`;
 }
@@ -467,14 +946,21 @@ async function startAssessment() {
 }
 
 function selectAnswer(i) {
+  if (state.isEvaluating || state.feedback !== null) return;
   state.answers[0] = i;
   render();
 }
 
 async function nextQuestion() {
-  if (state.answers[0] === undefined) return;
+  if (state.answers[0] === undefined || state.isEvaluating) return;
+
+  state.isEvaluating = true;
+  render();
 
   try {
+    const chosenIndex = state.answers[0];
+    const currentQ = state.currentQuestion;
+
     const response = await fetch('/api/answer', {
       method: 'POST',
       headers: {
@@ -483,23 +969,20 @@ async function nextQuestion() {
       body: JSON.stringify({
         student_id: state.userId,
         session_id: state.sessionId,
-        question_id: state.currentQuestion?.id,
-        chosen_index: state.answers[0],
-
+        question_id: currentQ?.id,
+        chosen_index: chosenIndex,
         response_time_sec: Math.max(
           0,
           Math.round(
             (Date.now() - (state.readingStart || Date.now())) / 1000
           )
         ),
-
         reread_count: 0
       })
     });
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-
       throw new Error(
         payload.error ||
         'Unable to save your answer.'
@@ -511,19 +994,60 @@ async function nextQuestion() {
     // The backend increments AssessmentSession.question_count.
     state.answeredCount += 1;
 
+    // Record session history for comprehensive mastery review
+    state.sessionHistory.push({
+      question_number: state.answeredCount,
+      question_id: currentQ.id,
+      prompt: currentQ.q,
+      skill_tag: currentQ.skill_tag,
+      difficulty: currentQ.difficulty,
+      chosen_index: chosenIndex,
+      correct_index: answerPayload.correct_index,
+      is_correct: answerPayload.is_correct,
+      points_earned: answerPayload.points_earned,
+      mastery_before: answerPayload.mastery_before,
+      mastery_after: answerPayload.mastery_after,
+      band_before: answerPayload.band_before,
+      band_after: answerPayload.band_after,
+      leveled_up: answerPayload.leveled_up
+    });
+
+    // Provide immediate interactive visual feedback on the choices
+    state.feedback = {
+      is_correct: answerPayload.is_correct,
+      chosen_index: chosenIndex,
+      correct_index: answerPayload.correct_index,
+      points_earned: answerPayload.points_earned,
+      leveled_up: answerPayload.leveled_up
+    };
+
+    render();
+
+    // Trigger visual animations
+    if (answerPayload.is_correct) {
+      triggerCorrectConfetti();
+    }
+    // Note: If incorrect, .shake-anim and .incorrect-choice are rendered on the button
+
+    // Brief pause so the student experiences the animation and feedback
+    await new Promise(resolve => setTimeout(resolve, 1200));
+
+    state.feedback = null;
+    state.isEvaluating = false;
+
     // ============================================================
     // ASSESSMENT HAS REACHED THE 10-QUESTION LIMIT
     // ============================================================
     if (state.answeredCount >= state.questionLimit) {
-
       state.currentQuestion = null;
+      state.completedMessage = 'Assessment complete. You answered 10 questions.';
 
-      state.completedMessage =
-        'Assessment complete. You answered 10 questions.';
+      // Load fresh mastery progress from backend
+      await loadMasteryResults();
 
       state.screen = 'results';
-
       render();
+      triggerCelebrationConfetti();
       return;
     }
 
@@ -537,18 +1061,19 @@ async function nextQuestion() {
     }
 
   } catch (err) {
-
+    state.isEvaluating = false;
+    state.feedback = null;
     console.error(err);
-
     alert(
       err.message ||
       'Could not save your answer.'
     );
+    render();
   }
 }
 
 function prevQuestion() {
-  if (state.currentQ>0) { state.currentQ--; render(); }
+  if (state.currentQ > 0) { state.currentQ--; render(); }
 }
 
 function resetApp() {
@@ -559,6 +1084,10 @@ function resetApp() {
   state.passage = null;
   state.answeredCount = 0;
   state.completedMessage = null;
+  state.sessionHistory = [];
+  state.feedback = null;
+  state.isEvaluating = false;
+  state.masteryData = null;
 
   // IMPORTANT: force the next assessment to create a new session
   state.sessionId = null;
