@@ -86,17 +86,20 @@ def pick_next_question(
 
 def relax_difficulty(difficulty: str) -> Optional[str]:
     """
-    Fallback when the exact-match question pool for (skill, difficulty) is
-    exhausted: step toward "medium" first (the most commonly authored
-    tier), since your seed content will likely be uneven across
-    skill x difficulty cells early on.
+    Return the next lower difficulty level when the
+    targeted difficulty is unavailable.
+
+    hard -> medium
+    medium -> easy
+    easy -> None
     """
-    order = ["easy", "medium", "hard"]
-    if difficulty == "medium":
-        return None  # nothing left to relax to; caller should try another skill
-    idx = order.index(difficulty)
-    # step toward the middle
-    return order[idx - 1] if idx > 1 else order[idx + 1]
+    fallback = {
+        "hard": "medium",
+        "medium": "easy",
+        "easy": None,
+    }
+
+    return fallback.get(difficulty)
 
 
 def pick_review_item(fetch_missed, student_id: int, skill_tag: str):
