@@ -54,9 +54,9 @@ class MasteryBand(str, Enum):
 
 # Must match Chapter 3.6.2 thresholds exactly.
 BAND_THRESHOLDS = {
-    MasteryBand.WEAK: (0.0, 0.40),
-    MasteryBand.DEVELOPING: (0.40, 0.70),
-    MasteryBand.STRONG: (0.70, 1.01),  # upper bound exclusive-safe
+    MasteryBand.WEAK: (0.0, 0.58),   #domain based on the mastery score ranges defined in phil-iri manual as suggested by the english teacher
+    MasteryBand.DEVELOPING: (0.59, 0.79),
+    MasteryBand.STRONG: (0.80, 1.00),  # upper bound exclusive-safe
 }
 
 BAND_TO_DIFFICULTY = {
