@@ -11,7 +11,7 @@ The system tracks three comprehension skills:
 
 GARCS maintains a separate mastery value for each skill. After a learner answers a question, the system updates the relevant skill state and uses the resulting mastery information to guide the next question's skill and difficulty.
 
-> **Research and implementation note:** GARCS uses a *PFA-inspired, rule-based* mastery model. It is not a statistically fitted Performance Factors Analysis model and does not train a machine-learning model. The update rules use predefined values and item-difficulty weights.
+
 
 ---
 
